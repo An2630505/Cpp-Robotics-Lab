@@ -1,4 +1,12 @@
 simulation_results.png
 output.txt
-src/PID.txt
+src/*.txt
 *.txt
+src/*.o
+
+output/
+build/
+build/*
+build/*.o
+build/src/*.o
+main

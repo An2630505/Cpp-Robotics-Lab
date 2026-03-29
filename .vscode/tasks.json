@@ -1,0 +1,31 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build",
+            "type": "shell",
+            "command": "make",
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "workingDirectory": "${workspaceFolder}",
+            "problemMatcher": ["$gcc"],
+            "detail": "使用 Makefile 编译项目"
+        },
+        {
+            "label": "clean",
+            "type": "shell",
+            "command": "make clean",
+            "workingDirectory": "${workspaceFolder}",
+            "detail": "清理编译文件"
+        },
+        {
+            "label": "rebuild",
+            "type": "shell",
+            "command": "make rebuild",
+            "workingDirectory": "${workspaceFolder}",
+            "detail": "重新编译项目"
+        }
+    ]
+}

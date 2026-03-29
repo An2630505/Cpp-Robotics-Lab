@@ -72,7 +72,9 @@ Eigen::VectorXd PID::positionPID(Eigen::VectorXd target, Eigen::VectorXd current
                     + this->ki.array() * this->int_error.array()
                     + this->kd.array() * (this->error - this->last_error).array();
 
-    // // 输出限幅
+    this->min_output = -10.0f * Eigen::VectorXd::Ones(this->n);
+    this->max_output =  10.0f * Eigen::VectorXd::Ones(this->n);
+    // 输出限幅
     output = limit(output, min_output, max_output);
 
     this->last_error = this->error;

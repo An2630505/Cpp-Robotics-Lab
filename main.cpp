@@ -9,10 +9,12 @@
 using namespace Eigen;
 using namespace std;
 
+
+
 int main() {
     
         // 打开文件用于写入
-    ofstream outfile("output.txt");
+    ofstream outfile("output/output.txt");
     if (!outfile.is_open()) {
         cerr << "Failed to open output file!" << endl;
         return 1;
@@ -34,10 +36,10 @@ int main() {
     //x,dx,ddx,y,dy,ddy
     A << 1, dt, 0.5f*dt*dt, 0, 0, 0,
         0, 1, dt, 0, 0, 0,
-        0, 0, 1, 0, 0, 0,
+        0, 0, 0, 0, 0, 0,
         0, 0, 0, 1, dt, 0.5f*dt*dt,
         0, 0, 0, 0, 1, dt,
-        0, 0, 0, 0, 0, 1;
+        0, 0, 0, 0, 0, 0;
 
     B << 0, 0,
         0, 0,
@@ -78,9 +80,9 @@ int main() {
     Eigen::VectorXd ki(nu);
     Eigen::VectorXd kd(nu);
 
-    kp << 50, 50;
-    ki << 0, 0;
-    kd << 0, 0;
+    kp << 0.01f, 0.01f;
+    ki << 0, 0.0;
+    kd << 1.0f, 1.0f;
 
 
     PID pid(nu, kp, ki, kd);
@@ -89,11 +91,11 @@ int main() {
 
     // lqr.Init(A, B, Q, R, S);
 
-    for (int i = 0; i < 10000; i++)
+    for (int i = 0; i < 3000; i++)
     {
-        u = pid.incrementalPID(target_y, y);
-        // lqr是状态反馈，但是我们这里只有观测值
-        // 那你还要有一个观测器
+        // u = pid.incrementalPID(target_y, y);
+        u = pid.positionPID(target_y, y);
+
         // u = lqr.run(target_y, y);
 
         y = plant.step(u, dt);

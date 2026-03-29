@@ -7,7 +7,7 @@ plt.rcParams['axes.unicode_minus'] = True  # 正常显示负号
 
 # 读取数据文件
 data = []
-with open('output.txt', 'r') as f:
+with open('output/output.txt', 'r') as f:
     for line in f:
         # 跳过注释行、标题行和空行
         if line.startswith('#') or line.startswith('Step') or not line.strip():
@@ -76,7 +76,7 @@ ax3.axhline(y=0, color='k', linestyle='--', linewidth=0.5, alpha=0.3)
 plt.tight_layout()
 
 # 保存图片
-plt.savefig('simulation_results.png', dpi=300, bbox_inches='tight')
+plt.savefig('output/simulation_results.png', dpi=300, bbox_inches='tight')
 print('图表已保存为 simulation_results.png')
 
 # 显示图表
