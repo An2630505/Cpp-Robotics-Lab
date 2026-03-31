@@ -93,8 +93,8 @@ int main() {
 
     for (int i = 0; i < 3000; i++)
     {
-        // u = pid.incrementalPID(target_y, y);
-        u = pid.positionPID(target_y, y);
+        u = pid.incrementalPID(target_y, y);
+        // u = pid.positionPID(target_y, y);
 
         // u = lqr.run(target_y, y);
 

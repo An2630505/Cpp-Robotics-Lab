@@ -6,7 +6,7 @@ make
 
 2. 运行
 
-./main
+./output/main
 
 3. python 脚本绘图
 
