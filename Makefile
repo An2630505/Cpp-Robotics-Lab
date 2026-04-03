@@ -8,7 +8,7 @@ SRCS = $(wildcard src/*.cpp)
 SRCS += $(wildcard *.cpp)
 
 # 目标文件（根据第一个源文件命名）
-TARGET = ./output/main
+TARGET = ./build/main
 
 # 生成目标文件列表（将 .cpp 替换为 .o）
 OBJS = $(patsubst %.cpp, ./build/%.o,$(SRCS))
