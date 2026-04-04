@@ -39,8 +39,13 @@ git push
 1. 切换到对应分支
 git checkout <branch>
 
+<<<<<<< HEAD
 2. 合并指定的分支到当前分支
 git merge developer
+=======
+2. 
+
+>>>>>>> developer
 
 
 ## 目录结构
