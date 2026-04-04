@@ -1,4 +1,5 @@
 #include <iostream>
+#include <random>
 #include "Plant.h"
 
 using namespace Eigen;
@@ -21,8 +22,8 @@ Plant::Plant()
     C = Eigen::MatrixXd::Zero(ny, nx);
     D = Eigen::MatrixXd::Zero(ny, nu);
 
-    Q = Eigen::MatrixXd::Identity(nx, nx) * 0.01;
-    R = Eigen::MatrixXd::Identity(ny, ny) * 0.01;
+    Q = Eigen::MatrixXd::Identity(nx, nx) * 0.00;
+    R = Eigen::MatrixXd::Identity(ny, ny) * 0.00;
 
     t = 0.0;
 }
@@ -38,6 +39,9 @@ Plant::Plant(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::Mat
     this->B = B;
     this->C = C;
     this->D = D;
+
+    this->Q = Eigen::MatrixXd::Identity(nx, nx) * 0.00001f;
+    this->R = Eigen::MatrixXd::Identity(ny, ny) * 0.001f;
 
     this->x = Eigen::VectorXd::Zero(nx);
     this->y = Eigen::VectorXd::Zero(ny);
@@ -62,11 +66,14 @@ Eigen::VectorXd Plant::Init(Eigen::VectorXd x0, Eigen::VectorXd u0)
 
 Eigen::VectorXd Plant::step(const Eigen::VectorXd& u, float dt)
 {
+    // 噪声
+    this->w = this->sampleGaussian(this->Q);
+    this->h = this->sampleGaussian(this->R);
     // 状态更新
-    this->x = this->A * this->x + this->B * u;
+    this->x = this->A * this->x + this->B * u + this->w;
 
     // 输出
-    this->y = this->C * this->x + this->D * u;
+    this->y = this->C * this->x + this->D * u + this->h;
 
     // 更新时间
     this->t += dt;
@@ -79,4 +86,17 @@ Eigen::VectorXd Plant::step(const Eigen::VectorXd& u, float dt)
 float Plant::getTime()
 {
     return this->t;
+}
+
+Eigen::VectorXd Plant::sampleGaussian(const Eigen::MatrixXd &cov) 
+{
+    int n = cov.rows();
+    Eigen::VectorXd z(n);
+    static std::default_random_engine gen;
+    static std::normal_distribution<double> dist(0.0, 1.0);
+
+    for (int i = 0; i < n; ++i) z(i) = dist(gen);
+
+    Eigen::MatrixXd L = cov.llt().matrixL();
+    return L * z;
 }

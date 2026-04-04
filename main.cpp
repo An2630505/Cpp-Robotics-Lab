@@ -69,12 +69,9 @@ int main() {
     S = MatrixXd::Identity(6, 6) * 0.01;
     R = MatrixXd::Identity(2, 2) * 0.01;
 
-    float sigma = 0.1;
-    // 真实测量噪声
-    // Eigen::VectorXd noise_measurement = sigma * Eigen::VectorXd::Random(2);
+    float sigma = 0.01f;
     // 估计测量噪声协方差
     R_kf = 10.0f*(sigma * sigma / 3.0) * Eigen::MatrixXd::Identity(2,2);
-
     P_kf = MatrixXd::Identity(6, 6) * 1;
     // 估计过程噪声协方差矩阵
     Q_kf << 1*dt*dt*dt*dt, 1*dt*dt*dt, 0, 0, 0, 0,
@@ -113,9 +110,9 @@ int main() {
     Eigen::VectorXd ki(nu);
     Eigen::VectorXd kd(nu);
 
-    kp << 0.1f, 0.1f;
-    ki << 0, 0.0;
-    kd << 1.0f, 1.0f;
+    kp << 2.78f, 2.78f;
+    ki << 0.0f, 0.0f;
+    kd << 0.0f, 0.0f;
 
     //PID控制器
     PID pid(nu, kp, ki, kd);
@@ -128,26 +125,26 @@ int main() {
 
     Eigen::VectorXd y_meas(2);// 滤波前的测量值（带噪声）
     Eigen::VectorXd y_filt(2);// 滤波后的估计值（通过观测矩阵得到位置）
-    for (int i = 0; i < 3000; i++)
+
+    for (int i = 0; i < 5000; i++)
     {
         // u = pid.incrementalPID(target_y, y);
         // u = pid.positionPID(target_y, y);
-        //测量噪声
-        Eigen::VectorXd noise_measurement = sigma * Eigen::VectorXd::Random(2);
-        y = y + noise_measurement;
+        
         x_hat = kf.update(u, y);
 
         // 记录滤波前的测量值（带噪声）和滤波后的估计值
         y_meas = y;  // 滤波前的测量值（带噪声）
         y_filt = C * x_hat;  // 滤波后的估计值（通过观测矩阵得到位置）
-
-        // u = lqr.run(target_y, x_hat);
-        u = pid.incrementalPID(target_y, y_filt);
+        u = lqr.run(target_y, x_hat);
+        // u = pid.incrementalPID(target_y, y_filt);
+        // u = pid.positionPID(target_y, y_filt);
 
         y = plant.step(u, dt);
 
-        
-        
+   
+
+
         //std::cout << "step= " << i << "      x = " << x_hat.transpose() << "      y = " << y.transpose() <<  "      u = " << u.transpose() << std::endl;
         std::cout.precision(2);
         std::cout << "step= " << i << "      x = " << x_hat.transpose() << "      y = " << y.transpose() <<  "      u = " << u.transpose() << std::endl;

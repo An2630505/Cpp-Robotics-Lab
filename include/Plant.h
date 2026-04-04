@@ -19,6 +19,10 @@ public:
     float getTime();
 
 private:
+
+    //高斯噪声
+    Eigen::VectorXd sampleGaussian(const Eigen::MatrixXd &cov);
+
     // ===== 系统维度 =====
     int nx; // 状态维度
     int ny; // 输出维度
@@ -27,6 +31,9 @@ private:
     // ===== 状态变量 =====
     Eigen::VectorXd x;   // 当前状态
     Eigen::VectorXd y;   // 当前输出
+
+    Eigen::VectorXd w;   // 过程噪声
+    Eigen::VectorXd h;   // 过程噪声
 
     Eigen::VectorXd x0;  // 初始状态
     Eigen::VectorXd u0;  // 初始输入
