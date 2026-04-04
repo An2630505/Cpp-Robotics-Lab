@@ -5,10 +5,11 @@
 
 
 
-void LQR::Init(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd Q, Eigen::MatrixXd R, Eigen::MatrixXd S)
+void LQR::Init(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::MatrixXd Q, Eigen::MatrixXd R, Eigen::MatrixXd S)
 {
     this->A_ = A;
     this->B_ = B;
+    this->C_ = C;
     this->Q_ = Q;
     this->R_ = R;
     this->S_ = S;
@@ -17,11 +18,12 @@ void LQR::Init(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd Q, Eigen::M
     this->K_ = this->solve();
 }
 
-Eigen::VectorXd LQR::run(Eigen::VectorXd y_ref, Eigen::VectorXd y_obs)
+Eigen::VectorXd LQR::run(Eigen::VectorXd y_ref, Eigen::VectorXd x_obs)
 {
     // Eigen::VectorXd x_est = this->C_.inverse() * y_obs;
     // Eigen::VectorXd x_ref = this->C_.inverse() * y_ref;
-    Eigen::VectorXd u = this->K_ * (y_ref - y_obs);
+    Eigen::VectorXd x_ref = this->C_.completeOrthogonalDecomposition().solve(y_ref);
+    Eigen::VectorXd u = this->K_ * (x_ref - x_obs);
     return u;
 }
 

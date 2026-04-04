@@ -62,7 +62,10 @@ int main() {
     D << 0, 0,
          0, 0;
 
-    Q = MatrixXd::Identity(6, 6) * 0.01;
+    // Q = MatrixXd::Identity(6, 6) * 0.01;
+    Q = Eigen::MatrixXd::Zero(6,6); // 赋值
+    Q(0,0) = 0.1;
+    Q(3,3) = 0.1;
     S = MatrixXd::Identity(6, 6) * 0.01;
     R = MatrixXd::Identity(2, 2) * 0.01;
 
@@ -110,7 +113,7 @@ int main() {
     Eigen::VectorXd ki(nu);
     Eigen::VectorXd kd(nu);
 
-    kp << 0.01f, 0.01f;
+    kp << 0.1f, 0.1f;
     ki << 0, 0.0;
     kd << 1.0f, 1.0f;
 
@@ -121,11 +124,11 @@ int main() {
     kf.init(A, B, C, P_kf, Q_kf, R_kf, x0);
     //LQR控制器 
     LQR lqr;
-    lqr.Init(A, B, Q, R, S);
+    lqr.Init(A, B, C, Q, R, S);
 
     Eigen::VectorXd y_meas(2);// 滤波前的测量值（带噪声）
     Eigen::VectorXd y_filt(2);// 滤波后的估计值（通过观测矩阵得到位置）
-    for (int i = 0; i < 300; i++)
+    for (int i = 0; i < 3000; i++)
     {
         // u = pid.incrementalPID(target_y, y);
         // u = pid.positionPID(target_y, y);
@@ -138,7 +141,8 @@ int main() {
         y_meas = y;  // 滤波前的测量值（带噪声）
         y_filt = C * x_hat;  // 滤波后的估计值（通过观测矩阵得到位置）
 
-        // u = lqr.run(target_y, y);
+        // u = lqr.run(target_y, x_hat);
+        u = pid.incrementalPID(target_y, y_filt);
 
         y = plant.step(u, dt);
 
