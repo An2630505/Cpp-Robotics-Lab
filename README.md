@@ -12,6 +12,36 @@ make
 
 python3 plot_results.py
 
+## git提交
+
+0. 拉取远端更新
+git fetch
+git pull
+
+1. 将文件添加到暂存区
+
+git add .
+
+2. 本地提交
+
+git commit -m "feat[module]： 添加功能"
+
+git commit -m "fix[module]: 修复bug"
+
+git commit -m "refactor[module]: 重构代码"
+
+3. 推送到远端
+git push
+
+
+### 合并分支
+
+1. 切换到对应分支
+git checkout <branch>
+
+2. 
+
+
 
 ## 目录结构
 
