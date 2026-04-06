@@ -1,15 +1,15 @@
 #include <random>
-#include "Plant.h"
+#include "Object.h"
 
 using namespace Eigen;
 // using namespace std;
 
-Plant::Plant()
+Object::Object()
 {
 
 }
 
-Plant::Plant(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::MatrixXd D)
+Object::Object(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::MatrixXd D)
 {
     this->t = 0.0;
     this->nx = A.rows();
@@ -34,7 +34,7 @@ Plant::Plant(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::Mat
     this->y = this->C * this->x0 + this->D * this->u0;
 }
 
-Eigen::VectorXd Plant::Init(Eigen::VectorXd x0, Eigen::VectorXd u0)
+Eigen::VectorXd Object::Init(Eigen::VectorXd x0, Eigen::VectorXd u0)
 {
     this->t = 0.0;
     this->x0 = x0;
@@ -45,30 +45,13 @@ Eigen::VectorXd Plant::Init(Eigen::VectorXd x0, Eigen::VectorXd u0)
     return this->y;
 }
 
-Eigen::VectorXd Plant::step( float dt , const Eigen::VectorXd& u, bool f)
+Eigen::VectorXd Object::step(float dt , const Eigen::VectorXd& u)
 {
-    float mu = 0.1;                   // 摩擦系数
-    std::vector<int> vel_indices = {1,3}; // 第0、1维是速度
-    float noise_std = 0.01;           // 随机噪声标准差
-    // 噪声
-    
-    this->w = this->generateFrictionDisturbance(this->x, mu, vel_indices, noise_std);
-    this->h = this->sampleGaussian(this->R);
-    if (f)
-    {
-        // 状态更新
-        this->x = this->A * this->x + this->B * u + this->w;
-        // 输出
-        this->y = this->C * this->x + this->D * u + this->h;
-    }
-    else
-    {
-        // 状态更新
-        this->x = this->A * this->x + this->B * u;
-        // 输出
-        this->y = this->C * this->x + this->D * u;
-    }
-        
+
+    // 状态更新
+    this->x = this->A * this->x + this->B * u;
+    // 输出
+    this->y = this->C * this->x + this->D * u;
 
     // 更新时间
     this->t += dt;
@@ -78,12 +61,12 @@ Eigen::VectorXd Plant::step( float dt , const Eigen::VectorXd& u, bool f)
 }
 
 
-float Plant::getTime()
+float Object::getTime()
 {
     return this->t;
 }
 
-Eigen::VectorXd Plant::sampleGaussian(const Eigen::MatrixXd &cov) 
+Eigen::VectorXd Object::sampleGaussian(const Eigen::MatrixXd &cov) 
 {
     int n = cov.rows();
     Eigen::VectorXd z(n);
@@ -101,7 +84,7 @@ Eigen::VectorXd Plant::sampleGaussian(const Eigen::MatrixXd &cov)
 // mu: 摩擦系数（库仑摩擦）
 // vel_indices: 速度所在状态索引（如 ẋ,ẏ 对应 0,1）
 // noise_std: 可选随机扰动标准差（默认为0）
-Eigen::VectorXd Plant::generateFrictionDisturbance(
+Eigen::VectorXd Object::generateFrictionDisturbance(
     const Eigen::VectorXd &x,
     float mu,
     std::vector<int> vel_indices, 
