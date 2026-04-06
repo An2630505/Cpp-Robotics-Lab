@@ -2,6 +2,8 @@
 #define ___PLANT_H___
 
 #include <Eigen/Dense>
+#include <vector>
+#include <iostream>
 
 class Plant
 {
@@ -11,10 +13,10 @@ public:
 
     Plant(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::MatrixXd D);
 
-    Eigen::VectorXd Init(Eigen::VectorXd x0, Eigen::VectorXd u0);
+    Eigen::VectorXd Init(Eigen::VectorXd x0, Eigen::VectorXd u0 = Eigen::VectorXd::Zero(2));
 
     // 单步运行
-    Eigen::VectorXd step(const Eigen::VectorXd& u, float dt);
+    Eigen::VectorXd step( float dt, const Eigen::VectorXd& u = Eigen::VectorXd::Zero(2), bool f = true);
 
     float getTime();
 
@@ -22,6 +24,7 @@ private:
 
     //高斯噪声
     Eigen::VectorXd sampleGaussian(const Eigen::MatrixXd &cov);
+    Eigen::VectorXd generateFrictionDisturbance(const Eigen::VectorXd &x, float mu, std::vector<int> vel_indices, float noise_std ); 
 
     // ===== 系统维度 =====
     int nx; // 状态维度

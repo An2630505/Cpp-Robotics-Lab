@@ -41,7 +41,7 @@ void KF::correct(Eigen::VectorXd measurement_)
     this->P_ = (Eigen::MatrixXd::Identity(this->n_, this->n_) - this->K_ * this->H_) * this->P_;
 }
 
-Eigen::VectorXd KF::update(Eigen::VectorXd u,Eigen::VectorXd measurement_)
+Eigen::VectorXd KF::update(Eigen::VectorXd measurement_, Eigen::VectorXd u)
 { 
     KF::predict(u);
     KF::correct(measurement_);

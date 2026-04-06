@@ -21,7 +21,7 @@ public:
     // 3. 更新协方差矩阵；
     void correct(Eigen::VectorXd measurement_);
 
-    Eigen::VectorXd update(Eigen::VectorXd u, Eigen::VectorXd measurement_);
+    Eigen::VectorXd update( Eigen::VectorXd measurement_, Eigen::VectorXd u = Eigen::VectorXd::Zero(2));
 
 private:
 

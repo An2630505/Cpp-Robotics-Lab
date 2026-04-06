@@ -1,4 +1,3 @@
-#include <iostream>
 #include <random>
 #include "Plant.h"
 
@@ -64,16 +63,30 @@ Eigen::VectorXd Plant::Init(Eigen::VectorXd x0, Eigen::VectorXd u0)
     return this->y;
 }
 
-Eigen::VectorXd Plant::step(const Eigen::VectorXd& u, float dt)
+Eigen::VectorXd Plant::step( float dt , const Eigen::VectorXd& u, bool f)
 {
+    float mu = 0.1;                   // 摩擦系数
+    std::vector<int> vel_indices = {1,3}; // 第0、1维是速度
+    float noise_std = 0.01;           // 随机噪声标准差
     // 噪声
-    this->w = this->sampleGaussian(this->Q);
+    
+    this->w = this->generateFrictionDisturbance(this->x, mu, vel_indices, noise_std);
     this->h = this->sampleGaussian(this->R);
-    // 状态更新
-    this->x = this->A * this->x + this->B * u + this->w;
-
-    // 输出
-    this->y = this->C * this->x + this->D * u + this->h;
+    if (f)
+    {
+        // 状态更新
+        this->x = this->A * this->x + this->B * u + this->w;
+        // 输出
+        this->y = this->C * this->x + this->D * u + this->h;
+    }
+    else
+    {
+        // 状态更新
+        this->x = this->A * this->x + this->B * u;
+        // 输出
+        this->y = this->C * this->x + this->D * u;
+    }
+        
 
     // 更新时间
     this->t += dt;
@@ -99,4 +112,31 @@ Eigen::VectorXd Plant::sampleGaussian(const Eigen::MatrixXd &cov)
 
     Eigen::MatrixXd L = cov.llt().matrixL();
     return L * z;
+}
+
+// 函数：生成摩擦扰动
+// x: 当前状态向量
+// mu: 摩擦系数（库仑摩擦）
+// vel_indices: 速度所在状态索引（如 ẋ,ẏ 对应 0,1）
+// noise_std: 可选随机扰动标准差（默认为0）
+Eigen::VectorXd Plant::generateFrictionDisturbance(
+    const Eigen::VectorXd &x,
+    float mu,
+    std::vector<int> vel_indices, 
+    float noise_std
+) 
+{
+    int n = x.size();
+    Eigen::VectorXd w = Eigen::VectorXd::Zero(n);
+
+    // 随机数生成器
+    static std::default_random_engine gen;
+    std::normal_distribution<float> dist(0.0, noise_std);
+
+    for(int idx : vel_indices){
+        float sign_v = (x(idx) > 0) ? 1.0 : ((x(idx) < 0) ? -1.0 : 0.0);
+        w(idx) = -mu * sign_v + dist(gen); // 库仑摩擦 + 随机噪声
+    }
+
+    return w;
 }
