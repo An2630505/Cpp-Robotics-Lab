@@ -1,3 +1,5 @@
+Makefile
+run.sh
 simulation_results.png
 output.txt
 src/*.txt
