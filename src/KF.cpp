@@ -14,6 +14,11 @@ void KF::init(Eigen::MatrixXd A, Eigen::MatrixXd B, Eigen::MatrixXd C, Eigen::Ma
     this->R_ = R;
 
     this->x_hat_ = x0;
+    x_hat = x0;      
+    x_post = x0;     
+    y_hat = C * x0;      // 观测向量先验估计值
+    y_meas = y_hat;     // 观测向量测量值
+    y_post = y_hat;     // 观测向量后验估计值
     
 }
 
@@ -26,24 +31,27 @@ void KF::predict(Eigen::VectorXd u)
     //u_ = u;
     this->x_hat_ = this->A_ * this->x_hat_ + this->B_ * u ;
     this ->P_=this->A_ * this->P_ * this->A_.transpose() + this->Q_;
+    
+    // 先验估计过程
+    y_hat = H_ * x_hat_;
+    x_hat = x_hat_;
 }
 
-    // 完成卡尔曼滤波的修正步骤
-    // 输入：测量值measurement_
-    // TODO
-    // 1. 计算卡尔曼增益；
-    // 2. 利用测量值修正预测值，更新状态量；
-    // 3. 更新协方差矩阵；
 void KF::correct(Eigen::VectorXd measurement_)
 {
     this->K_ = this->P_ * this->H_.transpose() * (this->H_ * this->P_ * this->H_.transpose() + this->R_).inverse();
     this->x_hat_ = this->x_hat_ + this->K_ * (measurement_ - this->H_ * this->x_hat_);
     this->P_ = (Eigen::MatrixXd::Identity(this->n_, this->n_) - this->K_ * this->H_) * this->P_;
+
+    // 后验估计修正过程
+    x_post = x_hat_;
+    y_meas = measurement_;
+    y_post = H_ * x_post;
 }
 
 Eigen::VectorXd KF::update(Eigen::VectorXd measurement_, Eigen::VectorXd u)
 { 
     KF::predict(u);
     KF::correct(measurement_);
-    return this->x_hat_;
+    return x_post;
 }

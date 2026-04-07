@@ -5,6 +5,13 @@
 
 class KF {
 public:
+    
+    Eigen::VectorXd x_hat;      // 状态向量先验估计值
+    Eigen::VectorXd x_post;     // 状态向量后验估计值
+    Eigen::VectorXd y_hat;      // 观测向量先验估计值
+    Eigen::VectorXd y_meas;     // 观测向量测量值
+    Eigen::VectorXd y_post;     // 观测向量后验估计值
+
     void init(Eigen::MatrixXd A, Eigen::MatrixXd B,Eigen::MatrixXd C,  Eigen::MatrixXd P, Eigen::MatrixXd Q, Eigen::MatrixXd R, Eigen::VectorXd x0);
 
     // 完成卡尔曼滤波的预测步骤
