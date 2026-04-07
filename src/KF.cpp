@@ -53,5 +53,5 @@ Eigen::VectorXd KF::update(Eigen::VectorXd measurement_, Eigen::VectorXd u)
 { 
     KF::predict(u);
     KF::correct(measurement_);
-    return this->x_hat_;
+    return x_post;
 }

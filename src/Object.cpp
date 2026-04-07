@@ -47,7 +47,6 @@ Eigen::VectorXd Object::Init(Eigen::VectorXd x0, Eigen::VectorXd u0)
 
 Eigen::VectorXd Object::step(float dt , const Eigen::VectorXd& u)
 {
-
     // 状态更新
     this->x = this->A * this->x + this->B * u;
     // 输出

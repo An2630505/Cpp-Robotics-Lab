@@ -142,6 +142,21 @@ Object objectInit(float dt) {
     return object;
 }
 
+PID PIDInit(const Plant &plant) {
+    int nu = plant.B.cols();  // 控制输入维度为2
+
+    Eigen::VectorXd kp(nu);
+    Eigen::VectorXd ki(nu);
+    Eigen::VectorXd kd(nu);
+
+    kp << 3.1f, 1.2f;  // x, y 方向的P参数
+    ki << 0.0f, 0.0f;     // I参数
+    kd << 5.0f, 5.0f;     // D参数
+
+    PID pid(nu, kp, ki, kd);
+    return pid;
+}
+
 
 int main() {
     
@@ -166,6 +181,7 @@ int main() {
 
     // 控制器初始化
     LQR lqr = LQRInit(plant);
+    PID pid = PIDInit(plant);
    
     // 跟踪目标初始化
     Object object = objectInit(dt);
@@ -181,14 +197,26 @@ int main() {
         object.kf.x_post = object.kf.update(object.y, Eigen::VectorXd::Zero(2));
         // 被控对象自身状态感知的卡尔曼滤波更新
         plant.kf.x_post = plant.kf.update(plant.y, u);
+        
+        // 提取位置信息(前两个元素: x, y)用于PID控制
+        Eigen::VectorXd target_pos(2);
+        Eigen::VectorXd current_pos(2);
+        target_pos << object.kf.y_post[0], object.kf.y_post[1];   // 目标位置 x, y
+        current_pos << plant.kf.y_post[0], plant.kf.y_post[1];     // 当前位置 x, y
+        
         // 控制器输出
-        u = lqr.run(object.kf.y_post, plant.kf.x_post);
+        // u = lqr.run(object.kf.y_post, plant.kf.x_post);
+        u = pid.positionPID(target_pos, current_pos);
+        
         // 被控对象运行
-        plant.y = plant.step(dt,u);
+        plant.y = plant.step(dt, u, false);
 
         // debug输出
-        std::cout.precision(2);
-        std::cout << "step= " << i << ", plant = " << plant.kf.y_post.transpose() << ", object = " << object.kf.y_post.transpose() << std::endl;
+        std::cout << fixed << setprecision(2) << "step= " << i << ", "
+                  << "u= " << u[0] << ", " << u[1] << ", "
+                  << "plant = " << plant.y[0] << ", " << plant.y[1] << ", " << plant.y[2] << ", " << plant.y[3] << ", "
+                //   << "plant = " << plant.kf.y_post[0] << ", " << plant.kf.y_post[1] << ", " << plant.kf.y_post[2] << ", " << plant.kf.y_post[3] << ", "
+                  << "object = " << object.kf.y_post[0] << ", " << object.kf.y_post[1] << std::endl;
 
         outfile << i << ", " 
                 << plant.kf.y_post[0] << ", " << plant.kf.y_post[1] << ", "<< plant.kf.y_post[2] << ", " << plant.kf.y_post[3] << ", " 
