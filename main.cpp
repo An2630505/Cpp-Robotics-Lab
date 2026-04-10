@@ -109,8 +109,8 @@ MPC MPCInit(Plant &plant, int N) {
     Q = Eigen::MatrixXd::Zero(6,6); // 赋值
     Q(0,0) = 0.1;
     Q(3,3) = 0.1;
-    S = MatrixXd::Identity(6, 6) * 0.01;
-    R = MatrixXd::Identity(2, 2) * 0.01;
+    S = MatrixXd::Identity(6, 6) * 0.1;
+    R = MatrixXd::Identity(2, 2) * 0.1;
 
     // //LQR控制器 
     MPC mpc;
@@ -201,7 +201,7 @@ int main() {
     // 被控对象初始化
     Plant plant = plantInit(dt, u);
 
-    int N = 100;
+    int N = 50;
     // 控制器初始化
     LQR lqr = LQRInit(plant);
     PID pid = PIDInit(plant);
@@ -214,7 +214,7 @@ int main() {
     Eigen::VectorXd target_y(4);
     target_y << 0.0, 0.0, 0.0, 0.0;
 
-    for (int i = 0; i < 800; i++)
+    for (int i = 0; i < 6000; i++)
     {
         // 跟踪目标单步运动
         object.y = object.step(dt, Eigen::VectorXd::Zero(2));
