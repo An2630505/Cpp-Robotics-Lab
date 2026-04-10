@@ -1,9 +1,11 @@
 #include <iostream>
 #include <fstream>
+#include <iomanip>
 
 #include "main.h"
 #include "PID.h"
 #include "LQR.h"
+#include "MPC.h"
 #include "Plant.h"
 #include "Object.h"
 #include "KF.h"
@@ -97,6 +99,26 @@ LQR LQRInit(Plant &plant) {
     return lqr;
 }
 
+MPC MPCInit(Plant &plant, int N) {
+    // MPC控制器的初始化函数
+    //MPC状态权重矩阵、输入权重矩阵和终端权重矩阵
+    MatrixXd Q(6, 6);
+    MatrixXd R(2, 2);
+    MatrixXd S(6, 6);
+
+    Q = Eigen::MatrixXd::Zero(6,6); // 赋值
+    Q(0,0) = 0.1;
+    Q(3,3) = 0.1;
+    S = MatrixXd::Identity(6, 6) * 0.01;
+    R = MatrixXd::Identity(2, 2) * 0.01;
+
+    // //LQR控制器 
+    MPC mpc;
+    mpc.Init(plant.A, plant.B, plant.C, plant.Q, R, S, N);
+
+    return mpc;
+}
+
 
 
 Object objectInit(float dt) {
@@ -179,15 +201,18 @@ int main() {
     // 被控对象初始化
     Plant plant = plantInit(dt, u);
 
+    int N = 100;
     // 控制器初始化
     LQR lqr = LQRInit(plant);
     PID pid = PIDInit(plant);
+    MPC mpc = MPCInit(plant,N);
    
     // 跟踪目标初始化
     Object object = objectInit(dt);
 
     //目标值
     Eigen::VectorXd target_y(4);
+    target_y << 0.0, 0.0, 0.0, 0.0;
 
     for (int i = 0; i < 800; i++)
     {
@@ -206,13 +231,15 @@ int main() {
         
         // 控制器输出
         // u = lqr.run(object.kf.y_post, plant.kf.x_post);
-        u = pid.positionPID(target_pos, current_pos);
+        // u = pid.positionPID(target_pos, current_pos);
+        u = mpc.predict(object.kf.y_post, plant.kf.x_post);
         
         // 被控对象运行
+        //该死
         plant.y = plant.step(dt, u, false);
 
         // debug输出
-        std::cout << fixed << setprecision(2) << "step= " << i << ", "
+        std::cout << std::fixed << std::setprecision(2) << "step= " << i << ", "
                   << "u= " << u[0] << ", " << u[1] << ", "
                   << "plant = " << plant.y[0] << ", " << plant.y[1] << ", " << plant.y[2] << ", " << plant.y[3] << ", "
                 //   << "plant = " << plant.kf.y_post[0] << ", " << plant.kf.y_post[1] << ", " << plant.kf.y_post[2] << ", " << plant.kf.y_post[3] << ", "
