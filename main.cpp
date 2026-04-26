@@ -13,6 +13,9 @@
 using namespace Eigen;
 using namespace std;
 
+// 目标轨迹角速度（圆周运动）
+const float w = 0.1f;
+
 Plant plantInit(float dt, Eigen::VectorXd u) {
     // 被控对象的初始化函数
     //系统矩阵
@@ -69,7 +72,7 @@ Plant plantInit(float dt, Eigen::VectorXd u) {
     //状态初始值
     Eigen::VectorXd x0(6);
 
-    x0 << 1, 0, 0, 1, 0, 0;
+    x0 << 20, 0, 0, 1, 0, 0;
     plant.y = plant.Init(x0, u);  
 
     // 被控对象的 KF 初始化
@@ -107,8 +110,10 @@ MPC MPCInit(Plant &plant, int N) {
     MatrixXd S(6, 6);
 
     Q = Eigen::MatrixXd::Zero(6,6); // 赋值
-    Q(0,0) = 0.1;
-    Q(3,3) = 0.1;
+    Q(0,0) = 10;
+    Q(1,1) = 10;
+    Q(3,3) = 10;
+    Q(4,4) = 10;
     S = MatrixXd::Identity(6, 6) * 0.1;
     R = MatrixXd::Identity(2, 2) * 0.1;
 
@@ -125,7 +130,6 @@ Object objectInit(float dt) {
     // 初始化参考目标
     MatrixXd A(4, 4);
     MatrixXd C(4, 4);
-    float w=0.1;
     //x,y,dx,dy
     A << 1, 0, dt, 0,
         0, 1, 0, dt, 
@@ -179,6 +183,15 @@ PID PIDInit(const Plant &plant) {
     return pid;
 }
 
+// 前馈控制：计算跟踪圆周轨迹所需的向心加速度
+// u_ff_x = -w * vy_ref,  u_ff_y = w * vx_ref
+Eigen::VectorXd computeFeedforward(Eigen::VectorXd y_ref, float w) {
+    Eigen::VectorXd u_ff(2);
+    u_ff << -w * y_ref[3],   // ax = -w * vy_ref
+             w * y_ref[2];    // ay =  w * vx_ref
+    return u_ff;
+}
+
 
 int main() {
     
@@ -196,6 +209,8 @@ int main() {
 
     // 控制量初始化
     Eigen::VectorXd u(2);
+    Eigen::VectorXd u_fb(2);
+    Eigen::VectorXd u_ff(2);
     u << 0.0, 0.0;
 
     // 被控对象初始化
@@ -214,7 +229,7 @@ int main() {
     Eigen::VectorXd target_y(4);
     target_y << 0.0, 0.0, 0.0, 0.0;
 
-    for (int i = 0; i < 6000; i++)
+    for (int i = 0; i < 800; i++)
     {
         // 跟踪目标单步运动
         object.y = object.step(dt, Eigen::VectorXd::Zero(2));
@@ -229,10 +244,12 @@ int main() {
         target_pos << object.kf.y_post[0], object.kf.y_post[1];   // 目标位置 x, y
         current_pos << plant.kf.y_post[0], plant.kf.y_post[1];     // 当前位置 x, y
         
-        // 控制器输出
-        // u = lqr.run(object.kf.y_post, plant.kf.x_post);
-        // u = pid.positionPID(target_pos, current_pos);
-        u = mpc.predict(object.kf.y_post, plant.kf.x_post);
+        // 控制器输出（反馈 + 前馈）
+        // u_fb = lqr.run(object.kf.y_post, plant.kf.x_post);
+        // u_fb = pid.positionPID(target_pos, current_pos);
+        u_fb = mpc.predict(object.kf.y_post, plant.kf.x_post);
+        u_ff = computeFeedforward(object.kf.y_post, w);
+        u = u_fb + u_ff;
         
         // 被控对象运行
         //该死

@@ -70,6 +70,20 @@ print(f'  最小值：{self_y_0.min():.4f}, 最大值：{self_y_0.max():.4f}')
 print(f'\n目标位置 X (Target Pos X) 统计:')
 print(f'  最小值：{obj_y_0.min():.4f}, 最大值：{obj_y_0.max():.4f}')
 
+# 稳态误差（取最后 10% 步数的平均值）
+steady_steps = max(1, len(steps) // 10)
+err_x = obj_y_0[-steady_steps:] - self_y_0[-steady_steps:]
+err_y = obj_y_1[-steady_steps:] - self_y_1[-steady_steps:]
+err_vx = obj_y_2[-steady_steps:] - self_y_2[-steady_steps:]
+err_vy = obj_y_3[-steady_steps:] - self_y_3[-steady_steps:]
+
+print(f'\n=== 稳态误差（最后 {steady_steps} 步平均） ===')
+print(f'  位置 X 误差：{np.mean(err_x):.6f}')
+print(f'  位置 Y 误差：{np.mean(err_y):.6f}')
+print(f'  速度 X 误差：{np.mean(err_vx):.6f}')
+print(f'  速度 Y 误差：{np.mean(err_vy):.6f}')
+print(f'  位置总误差 (RMSE)：{np.sqrt(np.mean(err_x**2 + err_y**2)):.6f}')
+
 # 创建 3 个子图
 fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10))
 fig.suptitle('Control Algorithm Results: Self vs Target', fontsize=16)
