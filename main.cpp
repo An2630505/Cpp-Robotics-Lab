@@ -97,7 +97,7 @@ LQR LQRInit(Plant &plant) {
 
     // //LQR控制器 
     LQR lqr;
-    lqr.Init(plant.A, plant.B, plant.C, plant.Q, R, S);
+    lqr.Init(plant.A, plant.B, plant.C, Q, R, S);
 
     return lqr;
 }
@@ -175,7 +175,7 @@ PID PIDInit(const Plant &plant) {
     Eigen::VectorXd ki(nu);
     Eigen::VectorXd kd(nu);
 
-    kp << 3.1f, 1.2f;  // x, y 方向的P参数
+    kp << 3.1f, 3.1f;  // x, y 方向的P参数（系统对称，增益一致）
     ki << 0.0f, 0.0f;     // I参数
     kd << 5.0f, 5.0f;     // D参数
 

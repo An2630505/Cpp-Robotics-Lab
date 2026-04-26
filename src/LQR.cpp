@@ -58,7 +58,7 @@ Eigen::VectorXd LQR::run(Eigen::VectorXd y_ref, Eigen::VectorXd x_obs)
             P_k = (this->A_ - this->B_ * F_k).transpose() * P_k * (this->A_ - this->B_ * F_k) 
                     + F_k.transpose() * this->R_ * F_k + this->Q_;
             //将P[k]存储到P矩阵中
-            P.block(0, nu*(i+1) - nu + 1, P.rows(), P_k.cols()) = P_k; 
+            P.block(0, nx * (i+1), P.rows(), P_k.cols()) = P_k;
             //更新P[k-1]
             P_k_1 = P_k;
             diff = (F_k - F_pre).cwiseAbs().maxCoeff();
