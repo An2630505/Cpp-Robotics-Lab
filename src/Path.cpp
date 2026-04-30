@@ -1,22 +1,22 @@
-#include "ComplexPath.h"
+#include "Path.h"
 #include <cmath>
 #include <sstream>
 
-ComplexPath::ComplexPath() : total_len_(0.0f), built_(false) {}
+Path::Path() : total_len_(0.0f), built_(false) {}
 
-void ComplexPath::addStraight(float length) {
+void Path::addStraight(float length) {
     segments_.push_back({STRAIGHT, length, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f});
 }
 
-void ComplexPath::addArc(float length, float radius) {
+void Path::addArc(float length, float radius) {
     segments_.push_back({ARC, length, radius, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f});
 }
 
-void ComplexPath::addSlalom(float length, float A, float omega) {
+void Path::addSlalom(float length, float A, float omega) {
     segments_.push_back({SLALOM, length, A, omega, 0.0f, 0.0f, 0.0f, 0.0f});
 }
 
-void ComplexPath::build() {
+void Path::build() {
     float s = 0.0f, x = 0.0f, y = 0.0f, psi = 0.0f;
 
     for (auto &seg : segments_) {
@@ -35,7 +35,7 @@ void ComplexPath::build() {
 
         case ARC: {
             float R = seg.param1;
-            float da = L / R;          // signed angle change
+            float da = L / R;
             float psi_end = psi + da;
             x += R * (std::sin(psi_end) - std::sin(psi));
             y -= R * (std::cos(psi_end) - std::cos(psi));
@@ -61,7 +61,7 @@ void ComplexPath::build() {
     built_ = true;
 }
 
-Eigen::VectorXd ComplexPath::getState(float s) {
+Eigen::VectorXd Path::getState(float s) {
     Eigen::VectorXd state(4);
     if (!built_ || segments_.empty()) {
         state << s, 0.0f, 0.0f, 0.0f;
@@ -71,7 +71,6 @@ Eigen::VectorXd ComplexPath::getState(float s) {
     if (s < 0.0f) s = 0.0f;
     if (s > total_len_) s = total_len_;
 
-    // 找到所在路段
     size_t idx = 0;
     while (idx + 1 < segments_.size() && segments_[idx + 1].start_s <= s)
         idx++;
@@ -118,14 +117,13 @@ Eigen::VectorXd ComplexPath::getState(float s) {
     return state;
 }
 
-void ComplexPath::findNearest(const Eigen::VectorXd &pos, float &s,
-                               float &e_y, float &e_psi, float &kappa) {
+void Path::findNearest(const Eigen::VectorXd &pos, float &s,
+                        float &e_y, float &e_psi, float &kappa) {
     if (!built_ || total_len_ <= 0.0f) {
         s = 0.0f; e_y = 0.0f; e_psi = 0.0f; kappa = 0.0f;
         return;
     }
 
-    // 粗搜
     float best_s = 0.0f;
     float best_dist = 1e9f;
     float step = 0.5f;
@@ -144,7 +142,6 @@ void ComplexPath::findNearest(const Eigen::VectorXd &pos, float &s,
         }
     }
 
-    // 精搜（梯度下降）
     for (int iter = 0; iter < 5; iter++) {
         float ds = 0.1f;
         Eigen::VectorXd st1 = getState(std::min(best_s + ds, total_len_));
@@ -179,7 +176,11 @@ void ComplexPath::findNearest(const Eigen::VectorXd &pos, float &s,
     e_psi -= static_cast<float>(M_PI);
 }
 
-std::string ComplexPath::getRefString(float dt, float Vx) const {
+Eigen::MatrixXd Path::getReferenceTrajectory(float s_start, int N, float dt, float Vx) {
+    return Eigen::MatrixXd::Zero(N + 1, 4);
+}
+
+std::string Path::getRefString(float dt, float Vx) const {
     std::ostringstream oss;
     oss << "type=complex dt=" << dt << " Vx=" << Vx << " segments";
     for (const auto &seg : segments_) {

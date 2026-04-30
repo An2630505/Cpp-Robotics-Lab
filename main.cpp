@@ -11,10 +11,6 @@
 #include "Object.h"
 #include "KF.h"
 #include "Path.h"
-#include "CirclePath.h"
-#include "SlalomPath.h"
-#include "StraightPath.h"
-#include "ComplexPath.h"
 
 
 using namespace Eigen;
@@ -275,9 +271,7 @@ MPC MPCInit(Plant_car &plant_car, int N) {
 //     return pid;
 // }
 
-// 前馈控制：最小化 ||B1*δ + B2*w||² 的最小二乘解
-// δ_ff = -(B1ᵀB1)⁻¹ * B1ᵀ * B2 * w = 0.472 * L*κ
-// 这样前馈抵消 B2 扰动的主力道，余量由 MPC 反馈填补
+// 前馈控制
 float computeFeedforward(float kappa) {
     float L=lr + lf;
     return L * kappa + (lr /( L * C_af))-(lf / (L * C_ar)) * m / 2 * Vx * Vx * kappa;
@@ -326,30 +320,30 @@ int main() {
     MPC mpc = MPCInit(plant_car,N);
    
     // 路径初始化：直道 + 弯道 + S弯 + 直角弯组合
-    ComplexPath complex_path;
-    complex_path.addStraight(50.0f);          // 长直道
-    complex_path.addArc(75.4f, 12.0f);        // 完整圆形（半径12m, 360°）
-    complex_path.addStraight(20.0f);
-    complex_path.addArc(31.4f, 20.0f);        // 左转90°缓弯
-    complex_path.addStraight(30.0f);
-    complex_path.addArc(9.42f, -6.0f);       // 右转弯
-    complex_path.addStraight(30.0f); 
-    complex_path.addSlalom(120.0f, 8.0f, 0.1f);  // S弯
-    complex_path.addStraight(30.0f);
-    complex_path.addArc(9.0f, -12.0f);       // 右转直角弯
-    complex_path.addStraight(30.0f);
-    complex_path.addArc(37.7f, 12.0f);        // 左转180°调头弯
-    complex_path.addSlalom(80.0f, 6.0f, 0.16f);   // 紧凑S弯
-    complex_path.addStraight(30.0f);
-    complex_path.addArc(23.6f, 15.0f);        // 左转90°
-    complex_path.addStraight(30.0f);
-    complex_path.addArc(15.7f, -10.0f);       // 右转直角弯
-    complex_path.addStraight(30.0f);         
-    complex_path.addArc(75.4f, 12.0f);        // 完整圆形（半径12m, 360°）
-    complex_path.addStraight(20.0f);            // 终点直道
-    complex_path.build();
+    Path path;
+    path.addStraight(50.0f);          // 长直道
+    path.addArc(75.4f, 12.0f);        // 完整圆形（半径12m, 360°）
+    path.addStraight(20.0f);
+    path.addArc(31.4f, 20.0f);        // 左转90°缓弯
+    path.addStraight(30.0f);
+    path.addArc(9.42f, -6.0f);       // 右转弯
+    path.addStraight(30.0f); 
+    path.addSlalom(120.0f, 8.0f, 0.1f);  // S弯
+    path.addStraight(30.0f);
+    path.addArc(9.0f, -12.0f);       // 右转直角弯
+    path.addStraight(30.0f);
+    path.addArc(37.7f, 12.0f);        // 左转180°调头弯
+    path.addSlalom(80.0f, 6.0f, 0.16f);   // 紧凑S弯
+    path.addStraight(30.0f);
+    path.addArc(23.6f, 15.0f);        // 左转90°
+    path.addStraight(30.0f);
+    path.addArc(15.7f, -10.0f);       // 右转直角弯
+    path.addStraight(30.0f);         
+    path.addArc(75.4f, 12.0f);        // 完整圆形（半径12m, 360°）
+    path.addStraight(20.0f);            // 终点直道
+    path.build();
 
-    outfile << "# REF: " << complex_path.getRefString(dt, Vx) << std::endl;
+    outfile << "# REF: " << path.getRefString(dt, Vx) << std::endl;
     outfile << "Step\ttime\te_y\tde_y\te_psi\tde_psi\tsteer" << std::endl;
     Eigen::VectorXd target_y(4);
     target_y << 0.0, 0.0, 0.0, 0.0;
@@ -358,7 +352,7 @@ int main() {
     {
         // 从路径获取当前曲率，计算路径角速度 w
         float s = i * Vx * dt;
-        Eigen::VectorXd path_state = complex_path.getState(s);
+        Eigen::VectorXd path_state = path.getState(s);
         float kappa = path_state[3];
         float w_cur = kappa * Vx;
 

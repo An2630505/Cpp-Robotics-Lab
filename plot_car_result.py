@@ -60,67 +60,12 @@ def load_data(path):
 
 
 def generate_reference(N, p):
-    """生成参考轨迹，支持 circle（圆周）, slalom（S型）, straight（直道）, composite（直道+圆弧）, complex（多段组合）"""
+    """生成参考轨迹，仅 complex 多段组合路径，circle 为旧格式回退"""
     ref_type = p.get("type", "circle")
     dt = p["dt"]
     Vx = p["Vx"]
 
-    if ref_type == "slalom":
-        A = p["A"]
-        omega = p["omega"]
-        xa = np.zeros(N)
-        ya = np.zeros(N)
-        vxa = np.zeros(N)
-        vya = np.zeros(N)
-        for i in range(N):
-            t = i * dt
-            x = Vx * t
-            y = A * math.sin(omega * x)
-            xa[i], ya[i] = x, y
-            vxa[i], vya[i] = Vx, A * omega * Vx * math.cos(omega * x)
-        return xa, ya, vxa, vya
-    elif ref_type == "straight":
-        psi = p["psi"]
-        start_x = p.get("start_x", 0.0)
-        start_y = p.get("start_y", 0.0)
-        xa = np.zeros(N)
-        ya = np.zeros(N)
-        vxa = np.zeros(N)
-        vya = np.zeros(N)
-        for i in range(N):
-            t = i * dt
-            xa[i] = start_x + Vx * t * math.cos(psi)
-            ya[i] = start_y + Vx * t * math.sin(psi)
-            vxa[i] = Vx * math.cos(psi)
-            vya[i] = Vx * math.sin(psi)
-        return xa, ya, vxa, vya
-    elif ref_type == "composite":
-        L = p["straight_len"]
-        R = p["R"]
-        cx = p["cx"]
-        cy = p["cy"]
-        xa = np.zeros(N)
-        ya = np.zeros(N)
-        vxa = np.zeros(N)
-        vya = np.zeros(N)
-        for i in range(N):
-            t = i * dt
-            s = Vx * t
-            if s < L:
-                xa[i] = s
-                ya[i] = 0.0
-                vxa[i] = Vx
-                vya[i] = 0.0
-            else:
-                s_c = s - L
-                theta = -math.pi / 2.0 + s_c / R
-                xa[i] = cx + R * math.cos(theta)
-                ya[i] = cy + R * math.sin(theta)
-                vxa[i] = -Vx * math.sin(theta)
-                vya[i] = Vx * math.cos(theta)
-        return xa, ya, vxa, vya
-    elif ref_type == "complex":
-        # 解析路段信息
+    if ref_type == "complex":
         seg_str = p["segments"]
         seg_parts = seg_str.split("|")
         segs = []
@@ -140,7 +85,7 @@ def generate_reference(N, p):
                 x += L * math.cos(psi)
                 y += L * math.sin(psi)
                 cum_s += L
-            elif t == "A":  # arc
+            elif t == "A":  # arc (circle or curve)
                 L, R = float(fields[1]), float(fields[2])
                 seg["L"], seg["R"] = L, R
                 da = L / R
@@ -204,7 +149,7 @@ def generate_reference(N, p):
 
         return xa, ya, vxa, vya
     else:
-        # 圆周运动（原 Object 逻辑）
+        # 回退：圆周运动
         x, y, vx, vy = p["x0"], p["y0"], p["vx0"], p["vy0"]
         xa, ya, vxa, vya = np.zeros(N), np.zeros(N), np.zeros(N), np.zeros(N)
         c, s = math.cos(p["w"] * dt), math.sin(p["w"] * dt)
