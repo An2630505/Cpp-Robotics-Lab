@@ -3,10 +3,11 @@
 # Cpp-Robotics-Lab 🚗
 
 **车辆横向控制算法实验室** — 基于自行车模型的 MPC 车道保持仿真平台
+
 [![Project: CRL](https://img.shields.io/badge/Project-CRL-blueviolet)](https://github.com/An2630505/Cpp-Robotics-Lab)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/An2630505/Cpp-Robotics-Lab)
-[![GitHub Stars](https://img.shields.io/github/stars/ToryD65/CRVS?style=social)](https://github.com/An2630505/Cpp-Robotics-Lab) 
+[![GitHub Stars](https://img.shields.io/github/stars/An2630505/Cpp-Robotics-Lab?style=social)](https://github.com/An2630505/Cpp-Robotics-Lab) 
 
 </div>
 
