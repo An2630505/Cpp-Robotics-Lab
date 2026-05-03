@@ -1,8 +1,12 @@
 <div align="center">
 
-# Control-Algo-Lab 🚗
+# Cpp-Robotics-Lab 🚗
 
 **车辆横向控制算法实验室** — 基于自行车模型的 MPC 车道保持仿真平台
+[![Project: CRL](https://img.shields.io/badge/Project-CRL-blueviolet)](https://github.com/An2630505/Cpp-Robotics-Lab)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/An2630505/Cpp-Robotics-Lab)
+[![GitHub Stars](https://img.shields.io/github/stars/ToryD65/CRVS?style=social)](https://github.com/An2630505/Cpp-Robotics-Lab) 
 
 </div>
 
@@ -156,7 +160,6 @@ python plot_results.py
 
 ### 车辆模型
 - **自行车模型**（Bicycle Model）：两轮车辆动力学模型，包含侧偏刚度、轴距等物理参数
-- **过程/观测噪声**：仿真真实传感器噪声环境
 - **卡尔曼滤波**：对含噪声的状态进行最优估计
 
 ### 路径定义
