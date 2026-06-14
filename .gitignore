@@ -13,3 +13,5 @@ build/*.o
 build/src/*.o
 main
 .DS_Store
+
+build2/
