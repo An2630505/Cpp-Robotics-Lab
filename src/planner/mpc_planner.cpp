@@ -19,6 +19,7 @@
 #include <cmath>
 #include <algorithm>
 #include <cfloat>
+#include <queue>
 
 // ===================================================================
 //  ContinuousMap — 连续空间碰撞检测
@@ -349,51 +350,74 @@ void MPCTrajectoryPlanner::trackWithPurePursuit(
     out_vels.assign(N_, v_des_);
     out_steers.assign(N_, 0.0);
 
-    const double L_AHEAD     = 3.0;   // 前视距离 (m)
-    const double MAX_LAT_ACC = 3.0;   // 最大侧向加速度 (m/s²)
+    const double MAX_LAT_ACC = 2.5;
+    const double MIN_LOOKAHEAD = 1.0;
+    const double MAX_LOOKAHEAD = 5.0;
+    const double LOOKAHEAD_RATIO = 0.35;
 
     Pose cur = start;
 
+    std::vector<double> ref_arc(ref.size(), 0);
+    std::vector<double> ref_kappa(ref.size(), 0);
+    for (size_t i = 1; i < ref.size(); i++) {
+        ref_arc[i] = ref_arc[i-1] + std::hypot(ref[i].x-ref[i-1].x, ref[i].y-ref[i-1].y);
+        double dth = ref[i].theta - ref[i-1].theta;
+        while (dth >  M_PI) dth -= 2*M_PI;
+        while (dth < -M_PI) dth += 2*M_PI;
+        double ds = ref_arc[i] - ref_arc[i-1];
+        ref_kappa[i] = (ds > 1e-6) ? dth / ds : 0;
+    }
+
+    auto nearestIdx = [&](const Pose& p) -> size_t {
+        double best = 1e9; size_t bi = 0;
+        for (size_t i = 0; i < ref.size(); i++) {
+            double d = std::hypot(ref[i].x-p.x, ref[i].y-p.y);
+            if (d < best) { best = d; bi = i; }
+        }
+        return bi;
+    };
+
     for (int k = 0; k < N_; k++) {
-        // ---- 步骤 1: 纯追踪转向 ----
-        Pose lp = getLookahead(ref, cur, L_AHEAD);
-        double dx = lp.x - cur.x;
-        double dy = lp.y - cur.y;
+        double speed = (k > 0) ? std::hypot(
+            out_traj[k].x-out_traj[k-1].x, out_traj[k].y-out_traj[k-1].y)/dt_ : v_des_;
+        double L_ahead = std::max(MIN_LOOKAHEAD,
+                           std::min(MAX_LOOKAHEAD, speed * LOOKAHEAD_RATIO));
 
-        // α = 前视方向角 - 当前朝向 (车辆需要转的角度)
-        double alpha = std::atan2(dy, dx) - cur.theta;
-        while (alpha >  M_PI) alpha -= 2 * M_PI;   // 归一化
-        while (alpha < -M_PI) alpha += 2 * M_PI;
+        // 前瞻减速
+        size_t ni = nearestIdx(cur);
+        double max_k = 0;
+        double pa = ref_arc[ni] + L_ahead + 3.0;
+        for (size_t i = ni; i < ref.size() && ref_arc[i] < pa; i++)
+            max_k = std::max(max_k, std::abs(ref_kappa[i]));
+        double v_lim = (max_k > 0.05) ? std::sqrt(MAX_LAT_ACC/max_k)*0.75 : v_des_;
 
-        double Ld = std::hypot(dx, dy);
-        if (Ld < 0.01) Ld = L_AHEAD;  // 防止除零
+        // 纯追踪 + 曲率前馈
+        Pose lp = getLookahead(ref, cur, L_ahead);
+        double dx = lp.x-cur.x, dy = lp.y-cur.y;
+        double alpha = std::atan2(dy,dx) - cur.theta;
+        while (alpha >  M_PI) alpha -= 2*M_PI;
+        while (alpha < -M_PI) alpha += 2*M_PI;
+        double Ld = std::hypot(dx,dy);
+        if (Ld < 0.01) Ld = L_ahead;
+        double d_pp = std::atan2(2.0*L_*std::sin(alpha), Ld);
+        double d_ff = std::atan(L_ * ref_kappa[ni]);
+        double delta = 0.5*d_pp + 0.5*d_ff;
 
-        // 纯追踪核心公式
-        double delta = std::atan2(2.0 * L_ * std::sin(alpha), Ld);
         delta = std::max(-MAX_STEER, std::min(MAX_STEER, delta));
-
-        // ---- 步骤 2: 曲率限速 ----
-        double curvature = std::abs(std::tan(delta) / L_);
-        double v_max = curvature > 1e-6
-            ? std::sqrt(MAX_LAT_ACC / curvature)   // 侧向加速度约束
-            : v_des_;                                // 直线无限制
-        double v = std::min(v_des_, v_max * 0.8);    // 80% 安全系数
+        double v = std::max(1.0, std::min(v_des_, v_lim));
 
         out_steers[k] = delta;
         out_vels[k]   = v;
 
-        // ---- 步骤 3: 自行车模型前向积分一步 ----
         if (std::abs(delta) < 1e-6) {
-            // 直线
-            out_traj[k+1].x = cur.x + v * std::cos(cur.theta) * dt_;
-            out_traj[k+1].y = cur.y + v * std::sin(cur.theta) * dt_;
+            out_traj[k+1].x = cur.x + v*std::cos(cur.theta)*dt_;
+            out_traj[k+1].y = cur.y + v*std::sin(cur.theta)*dt_;
             out_traj[k+1].theta = cur.theta;
         } else {
-            // 圆弧
             double R = L_ / std::tan(delta);
-            double dtheta = v * dt_ / R;
-            out_traj[k+1].x = cur.x + R * (std::sin(cur.theta + dtheta) - std::sin(cur.theta));
-            out_traj[k+1].y = cur.y + R * (std::cos(cur.theta) - std::cos(cur.theta + dtheta));
+            double dtheta = v*dt_/R;
+            out_traj[k+1].x = cur.x + R*(std::sin(cur.theta+dtheta)-std::sin(cur.theta));
+            out_traj[k+1].y = cur.y + R*(std::cos(cur.theta)-std::cos(cur.theta+dtheta));
             out_traj[k+1].theta = cur.theta + dtheta;
         }
         cur = out_traj[k+1];
@@ -618,146 +642,136 @@ void saveMPCPPM(const std::vector<std::vector<int>>& grid,
 //    加上纯追踪的平滑偏离, 实际轨迹仍保持在安全区域内。
 // ===================================================================
 
-int main() {
-    std::cout << "=== MPC 轨迹规划 ===" << std::endl;
+// ===================================================================
+//  读取路段 CSV → 位姿序列
+// ===================================================================
+//  CSV 格式: x y theta kappa (每行, #=注释)
+std::vector<Pose> readLaneCSV(const std::string& filepath) {
+    std::vector<Pose> path;
+    std::ifstream in(filepath);
+    std::string line;
+    while (std::getline(in, line)) {
+        if (line.empty() || line[0] == '#') continue;
+        double x, y, th, k;
+        std::istringstream iss(line);
+        if (iss >> x >> y >> th >> k) path.push_back({x, y, th});
+    }
+    return path;
+}
 
-    // ===== 第 1 步: 加载原始地图 =====
+// ===================================================================
+//  main — PNC 管线: 路段图 → A* 选路 → MPC 轨迹
+// ===================================================================
+//  前置条件: 先运行 ./build/scenario && ./build/graph_astar
+// ===================================================================
+
+int main() {
+    std::cout << "=== PNC 轨迹规划 ===" << std::endl;
+
+    // ===== 1. 加载 scenario 地图 =====
     auto gd = readGrid2("output/grid.txt");
 
-    // ===== 第 2 步: 膨胀障碍物 =====
-    // 车辆宽 1.8m + margin 0.2m = 2.0m 安全宽度
-    // 半径方向需要 ≥1.0m = 5 cells, 取 3 cells 作为最小缓冲区
-    const int DILATE_CELLS = 3;  // 每侧膨胀 3 格 = 0.6m
-    auto dilated = gd.grid;
-    for (int r = 0; r < gd.size; r++)
-        for (int c = 0; c < gd.size; c++)
-            if (gd.grid[r][c] == 1)        // 每个障碍物格子
-                for (int dr = -DILATE_CELLS; dr <= DILATE_CELLS; dr++)   // 膨胀到周围
-                    for (int dc = -DILATE_CELLS; dc <= DILATE_CELLS; dc++) {
-                        int nr = r + dr, nc = c + dc;
-                        if (nr >= 0 && nr < gd.size && nc >= 0 && nc < gd.size)
-                            dilated[nr][nc] = 1;
-                    }
-
-    // 确保起/终点不被膨胀吞没 (各清理 8×8 格区域)
-    for (int dr = -8; dr <= 8; dr++)
-        for (int dc = -8; dc <= 8; dc++) {
-            int r1 = std::max(0, std::min(gd.size - 1, gd.start_row + dr));
-            int c1 = std::max(0, std::min(gd.size - 1, gd.start_col + dc));
-            int r2 = std::max(0, std::min(gd.size - 1, gd.goal_row  + dr));
-            int c2 = std::max(0, std::min(gd.size - 1, gd.goal_col  + dc));
-            dilated[r1][c1] = 0;  // 起点区域清空
-            dilated[r2][c2] = 0;  // 终点区域清空
-        }
-
-    // ===== 第 3 步: 膨胀地图上运行离散 A* =====
-    // 使用 8 方向搜索, 与 astar.cpp 一致
-    std::vector<std::pair<int,int>> safe_cells;  // 存储 (row, col) 序列
-    {
-        // 离散 A* 节点 (内嵌实现, 不依赖 astar.cpp)
-        struct DP {
-            int r, c;
-            double g, h, f;                     // g=实际代价, h=启发式, f=g+h
-            bool operator>(const DP& o) const { return f > o.f; }  // 小顶堆
-        };
-
-        const double INF = 1e9;
-        std::vector<std::vector<double>> gs(gd.size,
-            std::vector<double>(gd.size, INF));                // g_score 数组
-        std::vector<std::vector<std::pair<int,int>>> parent(gd.size,
-            std::vector<std::pair<int,int>>(gd.size, {-1, -1})); // parent 链
-        std::priority_queue<DP, std::vector<DP>, std::greater<DP>> pq;  // open set
-
-        // 起点初始化
-        gs[gd.start_row][gd.start_col] = 0;
-        pq.push({gd.start_row, gd.start_col, 0, 0, 0});
-
-        // 8 方向移动: 上下左右 + 四对角
-        int dirs[8][2] = {{-1,0},{1,0},{0,-1},{0,1},{-1,-1},{-1,1},{1,-1},{1,1}};
-        double costs[8] = {1, 1, 1, 1, 1.414, 1.414, 1.414, 1.414};  // 对角=√2
-
-        bool found = false;
-        while (!pq.empty()) {
-            auto cur = pq.top(); pq.pop();                       // pop f 最小节点
-            if (cur.r == gd.goal_row && cur.c == gd.goal_col)    // 到达终点
-                { found = true; break; }
-            if (cur.g > gs[cur.r][cur.c] + 1e-6) continue;      // 已有更优路径
-
-            // 扩展 8 个邻居
-            for (int d = 0; d < 8; d++) {
-                int nr = cur.r + dirs[d][0], nc = cur.c + dirs[d][1];
-                if (nr < 0 || nr >= gd.size || nc < 0 || nc >= gd.size) continue;
-                if (dilated[nr][nc] == 1) continue;             // 障碍 (膨胀后)
-                double ng = cur.g + costs[d];
-                if (ng < gs[nr][nc]) {                          // 找到更优路径
-                    gs[nr][nc] = ng;
-                    parent[nr][nc] = {cur.r, cur.c};
-                    double h = std::hypot(nr - gd.goal_row, nc - gd.goal_col); // 欧几里得启发式
-                    pq.push({nr, nc, ng, h, ng + h});
-                }
-            }
-        }
-
-        // 回溯重建路径 (goal → start, 然后翻转)
-        if (found) {
-            int r = gd.goal_row, c = gd.goal_col;
-            while (r != -1 && c != -1) {
-                safe_cells.push_back({r, c});
-                auto p = parent[r][c];
-                r = p.first; c = p.second;
-            }
-            std::reverse(safe_cells.begin(), safe_cells.end());
-            std::cout << "膨胀地图 A*: " << safe_cells.size() << " 步" << std::endl;
-        }
+    // ===== 2. 读取 A* 选路结果 =====
+    // 优先用 Hybrid A* 路径 (已运动学可行)
+    std::vector<Pose> ref_path;
+    ref_path = readHybridPath("output/hybrid_path.txt");
+    if (!ref_path.empty()) {
+        std::cout << "加载 Hybrid A* 路径: " << ref_path.size() << " 点" << std::endl;
     }
 
-    if (safe_cells.empty()) {
-        std::cerr << "膨胀后无可行路径! 尝试减小 DILATE_CELLS" << std::endl;
+    if (ref_path.empty()) {
+    // 读取 selected_route.txt
+    std::ifstream route_file("output/selected_route.txt");
+    struct RouteItem { int lane_id, from, to; std::string csv; };
+    std::vector<RouteItem> route;
+    std::string rline;
+    while (route_file.is_open() && std::getline(route_file, rline)) {
+        if (rline.empty() || rline[0] == '#') continue;
+        RouteItem ri; std::istringstream iss(rline);
+        if (iss >> ri.lane_id >> ri.from >> ri.to >> ri.csv) route.push_back(ri);
+    }
+    route_file.close();
+    std::cout << "A* 选路: " << route.size() << " 段" << std::endl;
+
+    if (route.empty()) {
+        std::cerr << "路线为空!" << std::endl;
         return 1;
     }
 
-    // ===== 第 4 步: 转换到世界坐标 =====
-    // grid (row, col) → world (x, y, θ)
-    std::vector<Pose> ref_path;
-    for (size_t i = 0; i < safe_cells.size(); i++) {
-        Pose p;
-        p.x = safe_cells[i].second * CELL_SIZE + CELL_SIZE / 2.0;
-        p.y = safe_cells[i].first  * CELL_SIZE + CELL_SIZE / 2.0;
-        if (i + 1 < safe_cells.size())
-            p.theta = std::atan2(safe_cells[i+1].first  - safe_cells[i].first,
-                                 safe_cells[i+1].second - safe_cells[i].second);
-        else if (i > 0)
-            p.theta = ref_path.back().theta;
-        ref_path.push_back(p);
+    // ===== 3. 拼接路段中心线为参考路径 =====
+    for (const auto& ri : route) {
+        auto lane_path = readLaneCSV("output/" + ri.csv);
+        size_t start_i = 0;
+        if (!ref_path.empty() && !lane_path.empty()) {
+            double d = std::hypot(lane_path[0].x - ref_path.back().x,
+                                   lane_path[0].y - ref_path.back().y);
+            if (d < 0.5) start_i = 1;
+        }
+        for (size_t i = start_i; i < lane_path.size(); i++)
+            ref_path.push_back(lane_path[i]);
     }
 
-    // ===== 第 5 步: 纯追踪 MPC 轨迹生成 =====
+    // 计算参考路径总长度
+    double ref_len = 0;
+    for (size_t i = 1; i < ref_path.size(); i++)
+        ref_len += std::hypot(ref_path[i].x - ref_path[i-1].x,
+                               ref_path[i].y - ref_path[i-1].y);
+
+    // 如果图路线太短, 回退到离散 A* 路径并平滑 (消除锯齿弯)
+    if (ref_len < 10.0) {
+        std::cout << "图路线太短, 回退离散 A* 路径" << std::endl;
+        ref_path = discreteToHybridPath("output/path.txt");
+        // 平滑消除 45° 锯齿, 车辆才能跟踪
+        for (int pass = 0; pass < 4; pass++) {
+            auto tmp = ref_path;
+            for (size_t i = 2; i + 2 < ref_path.size(); i++) {
+                tmp[i].x = (ref_path[i-2].x + ref_path[i-1].x*2 + ref_path[i].x*4
+                          + ref_path[i+1].x*2 + ref_path[i+2].x) / 10.0;
+                tmp[i].y = (ref_path[i-2].y + ref_path[i-1].y*2 + ref_path[i].y*4
+                          + ref_path[i+1].y*2 + ref_path[i+2].y) / 10.0;
+            }
+            ref_path = tmp;
+        }
+        for (size_t i = 0; i + 1 < ref_path.size(); i++)
+            ref_path[i].theta = std::atan2(ref_path[i+1].y - ref_path[i].y,
+                                            ref_path[i+1].x - ref_path[i].x);
+        if (ref_path.size() > 1)
+            ref_path.back().theta = ref_path[ref_path.size()-2].theta;
+        std::cout << "路径已平滑" << std::endl;
+    }
+    std::cout << "参考路径: " << ref_path.size() << " 点" << std::endl;
+    }  // ref_path empty → route/lane loading
+
+
+    // ===== 4. 纯追踪 MPC 轨迹生成 =====
     double total_path_len = 0;
     for (size_t i = 1; i < ref_path.size(); i++)
         total_path_len += std::hypot(ref_path[i].x - ref_path[i-1].x,
                                       ref_path[i].y - ref_path[i-1].y);
 
-    const double V_DES = 3.0;          // 期望速度 (m/s)
-    MPCTrajectoryPlanner planner(dilated);
-    double plan_dt = 0.2;              // 控制周期 0.2s (5Hz)
-    // N = 路径总时间 / dt, 至少 20 步
-    int plan_N = std::max(20, (int)(total_path_len / (V_DES * plan_dt)) + 5);
+    const double V_DES = 3.0;   // 期望速度 (m/s), 城市路网
+    MPCTrajectoryPlanner planner(gd.grid);  // 用 scenario 的原始地图
+    double plan_dt = 0.2;
+    int plan_N = std::max(20, (int)(total_path_len / (V_DES * plan_dt) * 1.5) + 5);
     planner.setDt(plan_dt);
     planner.setHorizon(plan_N);
     planner.setDesiredSpeed(V_DES);
 
-    std::cout << "路径全长: " << total_path_len << "m → N=" << plan_N
+    std::cout << "参考路径: " << total_path_len << "m → N=" << plan_N
               << " dt=" << plan_dt << "s" << std::endl;
+
+    // 按路段限速调整期望速度 (取第一段限速作为参考)
+    // 更精细的做法是每段分别规划, 这里简化为统一限速
 
     std::vector<double> velocities, steers;
     auto mpc_traj = planner.plan(ref_path, velocities, steers);
 
-    // ===== 第 6 步: 保存输出文件 =====
+    // ===== 5. 输出 =====
 
-    // 6a. 轨迹文本: (x, y, θ, v, δ) 每行
+    // 5a. 轨迹
     {
         std::ofstream out("output/mpc_trajectory.txt");
-        out << "# MPC Trajectory\n# N=" << mpc_traj.size()
+        out << "# MPC Trajectory (PNC Pipeline)\n# N=" << mpc_traj.size()
             << "\n# x y theta v delta\n";
         for (size_t k = 0; k < mpc_traj.size(); k++) {
             double v = (k < velocities.size()) ? velocities[k] : 0.0;
@@ -766,20 +780,17 @@ int main() {
                 << mpc_traj[k].theta << " " << v << " " << s << "\n";
         }
         out.close();
-        std::cout << "MPC 轨迹已保存: output/mpc_trajectory.txt" << std::endl;
     }
 
-    // 6b. PPM 对比图
-    Pose start_pose = { gd.start_col * CELL_SIZE + CELL_SIZE / 2.0,
-                        gd.start_row * CELL_SIZE + CELL_SIZE / 2.0, 0.0 };
-    Pose goal_pose  = { gd.goal_col  * CELL_SIZE + CELL_SIZE / 2.0,
-                        gd.goal_row  * CELL_SIZE + CELL_SIZE / 2.0, 0.0 };
+    // 5b. PPM
+    Pose start_pose = ref_path.front();
+    Pose goal_pose  = ref_path.back();
     saveMPCPPM(gd.grid, start_pose, goal_pose, ref_path, mpc_traj,
                "output/mpc_result.ppm");
-    std::cout << "对比图已保存: output/mpc_result.ppm" << std::endl;
-    std::cout << "  (灰色=参考路径, 绿色=MPC 平滑轨迹)" << std::endl;
+    std::cout << "对比图: output/mpc_result.ppm" << std::endl;
+    std::cout << "  (灰=道路中心线, 绿=MPC 轨迹)" << std::endl;
 
-    // ===== 控制量统计 =====
+    // 5c. 统计
     double max_s = 0, avg_v = 0;
     for (double s : steers) max_s = std::max(max_s, std::abs(s));
     for (double v : velocities) avg_v += v;
@@ -787,6 +798,9 @@ int main() {
     std::cout << "\n控制统计:" << std::endl;
     std::cout << "  平均速度: " << avg_v << " m/s" << std::endl;
     std::cout << "  最大转向: " << (max_s * 180 / M_PI) << "°" << std::endl;
+    std::cout << "  轨迹文件: output/mpc_trajectory.txt" << std::endl;
 
+    // 自动展示结果
+    system("open output/mpc_result.ppm");
     return 0;
 }
