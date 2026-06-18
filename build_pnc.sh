@@ -23,7 +23,7 @@ if [ "$1" = "config" ]; then
 elif [ "$1" = "test" ]; then
     cmake --build build2
     echo ""
-    for t in kf pid lqr bicycle_model path; do
+    for t in kf pid lqr bicycle_model path astar; do
         echo "=== $t ==="
         ./build2/pnc/test_$t
     done

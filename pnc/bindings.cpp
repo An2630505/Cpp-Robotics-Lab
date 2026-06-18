@@ -1,6 +1,7 @@
 #include <pybind11/eigen.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
+#include <memory>
 
 #include "control/mpc.h"
 #include "control/kf.h"
@@ -8,11 +9,17 @@
 #include "control/lqr.h"
 #include "motion/bicycle_model.h"
 #include "motion/path.h"
+#include "motion/astar.h"
+#include "motion/hybrid_astar.h"
+#include "motion/mpc_planner.h"
+#include "motion/map_parser.h"
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(pnc, m) {
     m.doc() = "PNC Robotics Lab — C++ algorithm library";
+
+    // ======================== Control ========================
 
     // ---- MPC ----
     py::class_<MPC>(m, "MPC")
@@ -20,8 +27,7 @@ PYBIND11_MODULE(pnc, m) {
         .def("init", &MPC::Init,
              py::arg("A"), py::arg("B"), py::arg("C"),
              py::arg("Q"), py::arg("R"), py::arg("S"), py::arg("N"))
-        .def("predict", &MPC::predict,
-             py::arg("y_ref"), py::arg("x_obs"));
+        .def("predict", &MPC::predict, py::arg("y_ref"), py::arg("x_obs"));
 
     // ---- KF ----
     py::class_<KF>(m, "KF")
@@ -60,8 +66,9 @@ PYBIND11_MODULE(pnc, m) {
         .def("init", &LQR::Init,
              py::arg("A"), py::arg("B"), py::arg("C"),
              py::arg("Q"), py::arg("R"), py::arg("S"))
-        .def("run", &LQR::run,
-             py::arg("y_ref"), py::arg("x_obs"));
+        .def("run", &LQR::run, py::arg("y_ref"), py::arg("x_obs"));
+
+    // ======================== Motion ========================
 
     // ---- BicycleModel ----
     py::class_<BicycleModel>(m, "BicycleModel")
@@ -100,4 +107,62 @@ PYBIND11_MODULE(pnc, m) {
         .def("get_ref_string", &Path::getRefString,
              py::arg("dt"), py::arg("Vx"))
         .def("total_length", &Path::totalLength);
+
+    // ---- 基础类型 (需在其他 Motion 类之前注册) ----
+    py::class_<Point>(m, "Point")
+        .def(py::init<>())
+        .def_readwrite("row", &Point::row)
+        .def_readwrite("col", &Point::col);
+
+    py::class_<Pose>(m, "Pose")
+        .def(py::init<>())
+        .def_readwrite("x", &Pose::x)
+        .def_readwrite("y", &Pose::y)
+        .def_readwrite("theta", &Pose::theta);
+
+    // ---- A* (wrapper: 用 row/col 替代 Point 避免 segfault) ----
+    py::class_<AStar>(m, "AStar")
+        .def(py::init([](const std::vector<std::vector<int>>& grid,
+                         int sr, int sc, int gr, int gc) {
+            return std::make_unique<AStar>(grid, Point{sr, sc}, Point{gr, gc});
+        }), py::arg("grid"), py::arg("sr"), py::arg("sc"),
+            py::arg("gr"), py::arg("gc"))
+        .def("find_path", &AStar::findPath)
+        .def("get_search_history", &AStar::getSearchHistory);
+
+    // ---- HybridAStar ----
+    py::class_<HybridAStar>(m, "HybridAStar")
+        .def(py::init<const std::vector<std::vector<int>>&>(),
+             py::arg("grid"))
+        .def("set_wheelbase", &HybridAStar::setWheelbase)
+        .def("set_max_steer", &HybridAStar::setMaxSteer)
+        .def("set_num_steer", &HybridAStar::setNumSteer)
+        .def("set_arc_length", &HybridAStar::setArcLength)
+        .def("set_cell_size", &HybridAStar::setCellSize)
+        .def("set_goal_xy_tol", &HybridAStar::setGoalXYTol)
+        .def("set_goal_th_tol", &HybridAStar::setGoalThTol)
+        .def("plan", &HybridAStar::plan, py::arg("start"), py::arg("goal"));
+
+    // ---- MPCTrajectoryPlanner (output refs wrapped → tuple) ----
+    py::class_<MPCTrajectoryPlanner>(m, "MPCTrajectoryPlanner")
+        .def(py::init<const std::vector<std::vector<int>>&>(),
+             py::arg("grid"))
+        .def("set_horizon", &MPCTrajectoryPlanner::setHorizon)
+        .def("set_dt", &MPCTrajectoryPlanner::setDt)
+        .def("set_desired_speed", &MPCTrajectoryPlanner::setDesiredSpeed)
+        .def("plan", [](MPCTrajectoryPlanner& self,
+                        const std::vector<Pose>& ref_path) {
+            std::vector<double> velocities, steers;
+            auto traj = self.plan(ref_path, velocities, steers);
+            return py::make_tuple(traj, velocities, steers);
+        }, py::arg("ref_path"));
+
+    // ---- Map Parser (只暴露 void 返回/Save 函数; 复杂 struct 暂不注册) ----
+    m.def("dilate_grid", &dilateGrid, py::arg("grid"), py::arg("radius"));
+    m.def("save_grid", &saveGrid,
+          py::arg("grid"), py::arg("sr"), py::arg("sc"),
+          py::arg("gr"), py::arg("gc"), py::arg("path"));
+    m.def("save_grid_ppm", &saveGridPPM,
+          py::arg("grid"), py::arg("sr"), py::arg("sc"),
+          py::arg("gr"), py::arg("gc"), py::arg("path"));
 }
