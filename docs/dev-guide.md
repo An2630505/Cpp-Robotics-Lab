@@ -1,8 +1,99 @@
 # 开发操作手册
 
-Cpp-Robotics-Lab 重构后的统一操作流程。所有命令在项目根目录执行。
+Cpp-Robotics-Lab 统一开发流程。所有命令在项目根目录执行。
 
 ---
+
+## 三步工作流
+
+```
+┌──────────────┐     ┌──────────────┐     ┌──────────────┐
+│  1. 编译 C++  │ ──> │  2. 运行仿真  │ ──> │  3. 可视化    │
+│     算法库    │     │     场景脚本  │     │     查看结果  │
+└──────────────┘     └──────────────┘     └──────────────┘
+```
+
+### 1. 编译 C++ 算法库
+
+```bash
+# 首次：配置 + 编译
+./build_pnc.sh config
+
+# 日常：改了 C++ 代码后只编译
+./build_pnc.sh
+
+# 编译 + 运行单元测试
+./build_pnc.sh test
+```
+
+### 2. 运行仿真场景
+
+```bash
+python pipeline/<场景名>.py
+```
+
+| 场景 | 脚本 | 说明 |
+|------|------|------|
+| MPC 基础验证 | `pipeline/sim_mpc_basic.py` | 最小 MPC 车道保持，快速验证 |
+| 完整车道保持 | `pipeline/sim_lane_keeping.py` | 复现 `main.cpp`，20段复合路径 |
+
+仿真结果输出到 `output/<场景名>.txt`。
+
+### 3. 可视化
+
+```bash
+# 静态图表
+python pipeline/<场景名>_visualize.py
+
+# 交互式动画
+python pipeline/<场景名>_animate.py
+
+# 保存为图片 / GIF
+python pipeline/<场景名>_visualize.py --save output/result.png
+python pipeline/<场景名>_animate.py --save output/result.gif
+```
+
+## 完整示例 — 车道保持
+
+```bash
+# 1. 编译
+./build_pnc.sh
+
+# 2. 运行仿真
+python pipeline/sim_lane_keeping.py
+
+# 3. 查看结果
+python pipeline/sim_lane_keeping_visualize.py
+```
+
+## 添加新算法模块
+
+1. 在 `pnc/<模块>/` 下写 `xxx.h` + `xxx.cc`
+2. 添加 `xxx_test.cc` 单元测试
+3. 在 `pnc/CMakeLists.txt` 中注册源文件和测试
+4. 在 `pnc/bindings.cpp` 中添加 pybind11 绑定
+5. `./build_pnc.sh test` 编译并跑测试
+6. Python 侧 `import pnc; pnc.NewClass()` 即可调用
+
+## 目录结构
+
+```
+Cpp-Robotics-Lab/
+├── pipeline/          # Python 仿真场景脚本
+│   ├── sim_*.py              #   仿真运行
+│   ├── sim_*_visualize.py    #   静态可视化
+│   └── sim_*_animate.py      #   动画可视化
+├── pnc/               # C++ 算法库
+│   ├── bindings.cpp          #   pybind11 绑定
+│   ├── CMakeLists.txt        #   构建配置
+│   ├── control/              #   控制模块
+│   └── motion/               #   运动规划模块
+├── output/            # 仿真结果
+├── tools/             # 通用工具
+├── docs/              # 文档
+├── CMakeLists.txt     # 顶层构建
+└── build_pnc.sh       # 编译脚本
+```
 
 ## 环境
 
@@ -10,68 +101,8 @@ Cpp-Robotics-Lab 重构后的统一操作流程。所有命令在项目根目录
 conda activate CRL
 ```
 
-依赖：Eigen3、pybind11、numpy（已安装，见 refactor-plan.md）。
+依赖：Eigen3, pybind11, numpy, matplotlib（均已安装）。
 
 ---
 
-## 构建
-
-```bash
-# 首次：配置 + 编译
-./build_pnc.sh config
-
-# 日常：只编译（改了 C++ 代码后）
-./build_pnc.sh
-```
-
----
-
-## 运行仿真
-
-```bash
-# 通用格式
-python pipeline/<场景名>.py
-
-# 示例：MPC 车道保持
-python pipeline/sim_mpc_basic.py
-```
-
-仿真结果输出到 `output/` 目录下同名 `.txt` 文件。
-
----
-
-## 运行 C++ 单元测试
-
-```bash
-# 后续添加，预期格式：
-./build_and_test.sh
-```
-
----
-
-## 目录速查
-
-```
-pipeline/      — Python 仿真脚本（一个场景一个 .py）
-pnc/           — C++ 算法库（.cc + _test.cc）
-  motion/      —   运动规划
-  control/     —   控制
-  prediction/  —   预测（后期）
-output/        — 仿真结果
-docs/          — 文档
-build2/        — CMake 构建产物（已 gitignore）
-```
-
----
-
-## 添加新算法的流程
-
-1. 在 `pnc/<模块>/` 下写 `.cc` 算法文件
-2. 在 `pnc/CMakeLists.txt` 中添加源文件
-3. 在 `pnc/bindings.cpp` 中添加 pybind11 绑定
-4. `./build_pnc.sh` 编译
-5. Python 侧 `import pnc` 即可调用
-
----
-
-> 📅 2026-06-14
+> 📅 2026-06-14 | 更新 2026-06-18

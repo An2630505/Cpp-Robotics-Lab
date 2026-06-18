@@ -153,9 +153,8 @@ def run():
         # 车辆模型更新
         model.step(DT, w_cur, np.array([steer]))
 
-        log.append((step * DT, float(model.x[0]), float(model.x[1]),
-                    float(model.x[2]), float(model.x[3]), steer,
-                    float(model.kf.x_post[0]), float(model.kf.x_post[2])))
+        log.append((step, step * DT, float(model.x[0]), float(model.x[1]),
+                    float(model.x[2]), float(model.x[3]), steer))
 
         if step % 100 == 0:
             print(f"  step={step:3d}  e_y={model.x[0]:+.4f}  "
@@ -166,12 +165,11 @@ def run():
     outpath = "output/sim_lane_keeping.txt"
     with open(outpath, "w") as f:
         f.write("# REF: " + path.get_ref_string(DT, VX) + "\n")
-        f.write("time\te_y\tde_y\te_psi\tde_psi\tsteer\t"
-                "kf_e_y\tkf_e_psi\n")
+        f.write("Step\ttime\te_y\tde_y\te_psi\tde_psi\tsteer\n")
         for row in log:
-            f.write("\t".join(f"{v:.6f}" for v in row) + "\n")
+            f.write(f"{int(row[0])}\t" + "\t".join(f"{v:.6f}" for v in row[1:]) + "\n")
 
-    final_e_y = log[-1][1]
+    final_e_y = log[-1][2]
     print(f"\n仿真完成: {N_STEPS} 步, 最终 e_y={final_e_y:.4f}")
     print(f"结果已保存: {outpath}")
     print("✅ pipeline/sim_lane_keeping.py 跑通")
