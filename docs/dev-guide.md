@@ -79,7 +79,9 @@ python pipeline/sim_lane_keeping_visualize.py
 
 ```
 Cpp-Robotics-Lab/
-├── pipeline/          # Python 仿真场景脚本
+├── pipeline/          # Python 仿真场景与地图工具
+│   ├── map_parser/           #   赛道边界提取
+│   ├── centerline/           #   中心线拓扑图提取
 │   ├── sim_*.py              #   仿真运行
 │   ├── sim_*_visualize.py    #   静态可视化
 │   └── sim_*_animate.py      #   动画可视化
@@ -90,10 +92,19 @@ Cpp-Robotics-Lab/
 │   └── motion/               #   运动规划模块
 ├── output/            # 仿真结果
 ├── tools/             # 通用工具
-├── docs/              # 文档
+├── docs/              # 设计文档
+│   ├── map_parser.md         #   地图解析器设计
+│   └── centerline.md         #   中心线提取器设计
 ├── CMakeLists.txt     # 顶层构建
 └── build_pnc.sh       # 编译脚本
 ```
+
+## 地图处理模块
+
+| 模块 | 文档 | 说明 |
+|------|------|------|
+| `map_parser` | [docs/map_parser.md](map_parser.md) | JPG → 赛道边界（outer + holes） |
+| `centerline` | [docs/centerline.md](centerline.md) | 边界 → 中心线拓扑图（节点 + 边） |
 
 ## 环境
 
@@ -101,8 +112,8 @@ Cpp-Robotics-Lab/
 conda activate CRL
 ```
 
-依赖：Eigen3, pybind11, numpy, matplotlib（均已安装）。
+依赖：Eigen3, pybind11, numpy, matplotlib, opencv-python, scipy, scikit-image（均已安装）。
 
 ---
 
-> 📅 2026-06-14 | 更新 2026-06-18
+> 📅 2026-06-14 | 更新 2026-06-19
