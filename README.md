@@ -2,233 +2,149 @@
 
 # Cpp-Robotics-Lab 🚗
 
-**车辆横向控制算法实验室** — 基于自行车模型的 MPC 车道保持仿真平台
+**Autonomous Driving PNC Algorithm Learning & Experimentation Platform**
+
+Python Orchestration · C++ Algorithms · pybind11 Bindings
 
 [![Project: CRL](https://img.shields.io/badge/Project-CRL-blueviolet)](https://github.com/An2630505/Cpp-Robotics-Lab)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Status: Active](https://img.shields.io/badge/Status-Active-brightgreen)](https://github.com/An2630505/Cpp-Robotics-Lab)
-[![GitHub Stars](https://img.shields.io/github/stars/An2630505/Cpp-Robotics-Lab?style=social)](https://github.com/An2630505/Cpp-Robotics-Lab) 
+[![GitHub Stars](https://img.shields.io/github/stars/An2630505/Cpp-Robotics-Lab?style=social)](https://github.com/An2630505/Cpp-Robotics-Lab)
 
 </div>
 
 ---
 
-## 📋 目录
+## Overview
 
-- [项目概述](#-项目概述)
-- [效果图](#-效果图)
-- [外部依赖](#-外部依赖)
-- [快速开始](#-快速开始)
-- [项目结构](#-项目结构)
-- [功能特性](#-功能特性)
-- [使用指南](#-使用指南)
-- [License](#-license)
+Cpp-Robotics-Lab is a learning and experimentation platform for autonomous driving **PNC (Planning, Navigation, Control)** algorithms.
 
----
+Pipeline: **Map → Path Planning → Trajectory Planning → Control → Chassis**
 
-## 🎯 项目概述
+### Architecture
 
-**Control-Algo-Lab** 是一个用于学习和验证车辆横向控制算法的仿真平台。采用自行车模型（Bicycle Model）作为被控对象，通过 **模型预测控制（MPC）** 结合 **前馈控制** 实现车道保持（Lane Keeping）功能，支持直线、圆弧、S 弯等多种复杂路径跟踪，并配有卡尔曼滤波进行状态估计。
+```
+Python pipeline (scene scripts / visualization / orchestration)
+        ↕ pybind11
+C++ pnc library (core algorithms, compiled as .so)
+```
 
 ---
 
-## 🖼️ 效果图
-
-![仿真动画](output.gif)
-
-*运行 `python plot_car_result.py` 可查看动态动画，包含：*
-
-> - 主视图：车辆模型跟踪参考路径的实时动画
-> - 右上角小地图：完整路径概览与当前位置
-> - 右上子图：横向误差 e_y 随时间变化曲线
-> - 右下子图：航向误差 e_psi 随时间变化曲线
-
----
-
-## 📦 外部依赖
-
-| 依赖 | 版本要求 | 用途 |
-|------|---------|------|
-| **Eigen3** | ≥ 3.3 | 线性代数库（矩阵运算、QR 分解等） |
-| **g++** | ≥ 4.8 (需 C++11 支持) | C++ 编译器 |
-| **Python** | ≥ 3.6 | 数据可视化 |
-| **matplotlib** | ≥ 3.0 | Python 绘图库 |
-| **numpy** | ≥ 1.18 | Python 数值计算库 |
-
-### macOS 安装依赖
+## Quick Start
 
 ```bash
-# 安装 Eigen3
-brew install eigen
+# 1. Build C++ library
+./build_pnc.sh
 
-# 安装 Python 依赖
-pip3 install matplotlib numpy
+# 2. Run simulation
+python pipeline/sim_lane_keeping.py
+
+# 3. Visualize results
+python pipeline/sim_lane_keeping_visualize.py
 ```
 
-### Ubuntu 安装依赖
+See [docs/dev-guide.md](docs/dev-guide.md) for details.
 
-```bash
-# 安装 Eigen3
-sudo apt install libeigen3-dev
+---
 
-# 安装 Python 依赖
-pip3 install matplotlib numpy
+## Project Structure
+
+```
+Cpp-Robotics-Lab/
+├── pipeline/                  # Python simulation scripts
+│   ├── sim_lane_keeping.py
+│   ├── sim_path_planning.py
+│   ├── sim_navigation.py
+│   └── *_visualize.py / *_animate.py
+├── pnc/                       # C++ algorithm library
+│   ├── common/types.h                #   Shared data structures
+│   ├── control/                      #   Control algorithms
+│   │   ├── mpc/   (MPC controller)
+│   │   ├── kf/    (Kalman Filter)
+│   │   ├── pid/   (PID controller)
+│   │   └── lqr/   (LQR controller)
+│   ├── motion/                       #   Motion planning algorithms
+│   │   ├── astar/          (A* path planning)
+│   │   ├── hybrid_astar/   (Hybrid A*)
+│   │   ├── mpc_planner/    (Pure Pursuit trajectory planner)
+│   │   ├── map_parser/     (PGM map parser)
+│   │   ├── bicycle_model/  (Vehicle dynamics model)
+│   │   └── path/           (Geometric path builder)
+│   └── prediction/                  #   (future)
+├── map/                       # Input data (gitignored)
+├── output/                    # Simulation output (gitignored)
+├── docs/                      # Documentation
+└── build_pnc.sh               # Build script
 ```
 
 ---
 
-## 🚀 快速开始
+## Algorithms
 
-### 1️⃣ 编译
+### Motion
 
-```bash
-make
-```
+| Algorithm | Description |
+|-----------|-------------|
+| A* | 8-direction discrete path planning |
+| Hybrid A* | Kinematically-constrained continuous planning |
+| Pure Pursuit | Trajectory tracking with bicycle model |
+| Bicycle Model | Vehicle lateral dynamics |
+| Path | Multi-segment (straight/arc/slalom) path |
+| Map Parser | PGM/YAML occupancy grid extraction |
 
-> 默认使用 `g++`，C++11 标准。如需自定义编译器，修改 `Makefile` 中的 `CXX` 变量。
+### Control
 
-### 2️⃣ 运行仿真
-
-```bash
-./build/main
-```
-
-仿真结果将输出到 `output/output.txt`，包含每步的时间步、误差状态和控制量。
-
-### 3️⃣ 可视化
-
-```bash
-# 动态动画（推荐）
-python plot_car_result.py
-
-# 静态结果图
-python plot_results.py
-```
-
-### 一键运行
-
-```bash
-./run.sh
-```
-
-等价于依次执行 `make` → `./build/main` → `python plot_results.py`。
+| Algorithm | Description |
+|-----------|-------------|
+| MPC | Model Predictive Control |
+| LQR | Linear Quadratic Regulator |
+| PID | Positional & incremental PID |
+| Kalman Filter | State estimation |
 
 ---
 
-## 📁 项目结构
+## Adding a New Algorithm
 
-```
-.
-├── Makefile            # 编译配置
-├── config.json         # 仿真参数配置
-├── main.cpp            # 主程序入口
-├── main.h              # 主程序头文件
-├── run.sh              # 一键运行脚本
-│
-├── include/            # 头文件
-│   ├── Path.h          #   多段组合路径（直道/圆弧/S弯）
-│   ├── Plant_car.h     #   自行车模型被控对象
-│   ├── MPC.h           #   模型预测控制器
-│   ├── KF.h            #   卡尔曼滤波器
-│   ├── PID.h           #   PID 控制器
-│   ├── LQR.h           #   LQR 控制器
-│   ├── Object.h        #   参考目标对象
-│   └── Plant.h         #   通用被控对象（旧版）
-│
-├── src/                # 源文件
-│   ├── Path.cpp
-│   ├── Plant_car.cpp
-│   ├── MPC.cpp
-│   ├── KF.cpp
-│   ├── PID.cpp
-│   ├── LQR.cpp
-│   ├── Object.cpp
-│   └── Plant.cpp
-│
-├── build/              # 编译产物
-├── output/             # 仿真输出与图表
-│   ├── output.txt      #   仿真数据
-│   └── simulation_results.png
-│
-└── plot_car_result.py  # 动态可视化脚本
-    plot_results.py
-    plot_results_animation.py
-```
+1. Create `pnc/<module>/<algo>/xxx.h` + `xxx.cc` + `xxx_test.cc`
+2. Register in `pnc/CMakeLists.txt`
+3. Add pybind11 bindings in `pnc/bindings.cpp`
+4. `./build_pnc.sh test` to build and verify
 
 ---
 
-## ✨ 功能特性
+## v1.0 Highlights
 
-### 车辆模型
-- **自行车模型**（Bicycle Model）：两轮车辆动力学模型，包含侧偏刚度、轴距等物理参数
-- **卡尔曼滤波**：对含噪声的状态进行最优估计
+> 🎉 First framework-level release
 
-### 路径定义
-- **直道**（Straight）：沿任意航向的直线
-- **圆弧**（Arc）：任意半径/角度的左转或右转，支持完整圆形（360°）
-- **S 弯**（Slalom）：正弦型曲线，可配置幅值和频率
-- **多段组合**：以上三种路段任意拼接，自动计算衔接位姿
+| Highlight | Description |
+|-----------|-------------|
+| **Pipeline/Algorithm Separation** | Python orchestrates scenes, C++ handles core computation |
+| **pybind11 Integration** | `import pnc` — call C++ algorithms directly from Python |
+| **Unified 3-Step Workflow** | `Build → Simulate → Visualize`, consistent across all scenes |
+| **Modular Structure** | `pnc/<module>/<algo>/` with `.h` + `.cc` + `_test.cc` |
+| **End-to-End Simulation** | Map → A* planning → Pure Pursuit → MPC lane keeping |
+| **Unit Test Suite** | 6 standalone C++ tests, `./build_pnc.sh test` |
+| **Built-in Visualization** | Static charts + animation, auto-read simulation output |
 
-### 控制器
-- **MPC**（模型预测控制）：基于线性误差模型的预测控制，带约束处理能力
-- **前馈控制**：根据路径曲率计算前馈补偿，减少稳态误差
-- **PID** / **LQR**：可选的传统控制方法（代码保留）
+### Algorithms (10 total)
 
-### 可视化
-- **主视图**：车辆模型实时跟踪状态（车身、前后轮、车道边界）
-- **小地图**：完整路径俯瞰 + 当前位置标记
-- **误差曲线**：横向误差 e_y 和航向误差 e_psi 实时绘制
-
----
-
-## 📖 使用指南
-
-### 自定义路径
-
-编辑 `main.cpp` 中的路径定义：
-
-```cpp
-Path path;
-path.addStraight(80.0f);          // 直道 80m
-path.addArc(75.4f, 12.0f);        // 圆弧（半径12m，360°完整圆形）
-path.addSlalom(120.0f, 8.0f, 0.1f); // S 弯（幅值8m，角频率0.1 rad/m）
-path.build();                     // 构建路径（计算各段起始位姿）
-```
-
-支持的路段类型：
-| 方法 | 参数 | 说明 |
-|------|------|------|
-| `addStraight(length)` | 长度(m) | 沿当前航向的直线 |
-| `addArc(length, radius)` | 弧长(m), 半径(m) | radius>0 左转，<0 右转 |
-| `addSlalom(length, A, omega)` | 长度(m), 幅值(m), 角频率(rad/m) | 正弦型 S 弯 |
-
-### 调整控制器参数
-
-编辑 `main.cpp` 中 `MPCInit` 函数的权重矩阵：
-
-```cpp
-Q(0,0) = 100;   // e_y 权重（横向误差）
-Q(1,1) = 1;     // de_y 权重
-Q(2,2) = 20;    // e_psi 权重（航向误差）
-Q(3,3) = 1;     // de_psi 权重
-R(0,0) = 0.05;  // 控制量权重
-```
-
-### 配置仿真参数
-
-编辑 `config.json`：
-
-```json
-{
-  "simulation": {
-    "dt": 0.1,
-    "total_steps": 800
-  }
-}
-```
+| Module | Algorithms |
+|--------|-----------|
+| Motion | A* · Hybrid A* · Pure Pursuit · Bicycle Model · Path · Map Parser |
+| Control | MPC · LQR · PID · Kalman Filter |
 
 ---
 
-## 📄 License
+## Version History
+
+| Version | Description |
+|---------|-------------|
+| **v1.0** | Framework refactor: Python pipeline + C++ pnc library, 10 algorithms |
+| Legacy | Makefile architecture, experimental prototype |
+
+---
+
+## License
 
 MIT
