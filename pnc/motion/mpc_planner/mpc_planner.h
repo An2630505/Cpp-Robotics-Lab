@@ -2,7 +2,7 @@
 #define PNC_MOTION_MPC_PLANNER_H_
 
 #include <vector>
-#include "../common/types.h"
+#include "../../common/types.h"
 
 const double MPC_CELL_SIZE    = 0.2;
 const int    MPC_GRID_SIZE    = 256;

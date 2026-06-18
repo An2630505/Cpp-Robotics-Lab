@@ -3,16 +3,16 @@
 #include <pybind11/stl.h>
 #include <memory>
 
-#include "control/mpc.h"
-#include "control/kf.h"
-#include "control/pid.h"
-#include "control/lqr.h"
-#include "motion/bicycle_model.h"
-#include "motion/path.h"
-#include "motion/astar.h"
-#include "motion/hybrid_astar.h"
-#include "motion/mpc_planner.h"
-#include "motion/map_parser.h"
+#include "control/mpc/mpc.h"
+#include "control/kf/kf.h"
+#include "control/pid/pid.h"
+#include "control/lqr/lqr.h"
+#include "motion/bicycle_model/bicycle_model.h"
+#include "motion/path/path.h"
+#include "motion/astar/astar.h"
+#include "motion/hybrid_astar/hybrid_astar.h"
+#include "motion/mpc_planner/mpc_planner.h"
+#include "motion/map_parser/map_parser.h"
 
 namespace py = pybind11;
 

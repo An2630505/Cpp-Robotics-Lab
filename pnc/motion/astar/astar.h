@@ -6,7 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <algorithm>
-#include "../common/types.h"
+#include "../../common/types.h"
 
 /// A* 路径规划 (8方向, 欧几里得启发式)
 class AStar {

@@ -2,7 +2,7 @@
 #define PNC_MOTION_BICYCLE_MODEL_H_
 
 #include <Eigen/Dense>
-#include "../control/kf.h"
+#include "../../control/kf/kf.h"
 
 /// 自行车模型 — 车辆横向动力学被控对象
 class BicycleModel {
