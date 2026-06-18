@@ -9,7 +9,7 @@ sim_navigation.py — 端到端 PNC 导航仿真
 """
 
 import sys, os, math, argparse
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build2", "pnc"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build", "pnc"))
 import numpy as np
 import pnc
 

@@ -13,7 +13,7 @@ sim_path_planning.py — 路径规划仿真场景
 """
 
 import sys, os, argparse, math, random
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build2", "pnc"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build", "pnc"))
 import numpy as np
 import pnc
 

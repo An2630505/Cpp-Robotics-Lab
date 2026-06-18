@@ -1,6 +1,5 @@
 # ===== 构建产物 =====
 build/
-build2/
 main
 *.o
 *.so
@@ -38,9 +37,10 @@ output/*.csv
 __pycache__/
 *.pyc
 
-# ===== 系统 =====
+# ===== 系统 & IDE =====
 .DS_Store
 Thumbs.db
+.vscode/
 
 # ===== 旧构建 =====
 Makefile

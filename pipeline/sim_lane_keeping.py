@@ -9,7 +9,7 @@ sim_lane_keeping.py — 完整车道保持仿真
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build2", "pnc"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build", "pnc"))
 
 import numpy as np
 import pnc

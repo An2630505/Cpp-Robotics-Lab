@@ -9,7 +9,7 @@ sim_mpc_basic.py — 最小 MPC 车道保持仿真
 
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build2", "pnc"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "build", "pnc"))
 
 import numpy as np
 import pnc  # noqa: E402  — C++ 算法库

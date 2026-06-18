@@ -14,23 +14,23 @@ PYTHON_LIB="/Users/tory/miniconda3/envs/CRL/lib/libpython3.11.dylib"
 PYTHON_INC="/Users/tory/miniconda3/envs/CRL/include/python3.11"
 
 if [ "$1" = "config" ]; then
-    cmake -B build2 \
+    cmake -B build \
         -DEigen3_DIR="$EIGEN3_DIR" \
         -Dpybind11_DIR="$PYBIND11_DIR" \
         -DPYTHON_EXECUTABLE="$PYTHON_EXEC" \
         -DPYTHON_LIBRARY="$PYTHON_LIB" \
         -DPYTHON_INCLUDE_DIR="$PYTHON_INC"
 elif [ "$1" = "test" ]; then
-    cmake --build build2
+    cmake --build build
     echo ""
     for t in kf pid lqr bicycle_model path astar; do
         echo "=== $t ==="
-        ./build2/pnc/test_$t
+        ./build/pnc/test_$t
     done
     echo ""
     echo "✅ 全部测试通过"
     exit 0
 fi
 
-cmake --build build2
+cmake --build build
 echo "✅ 构建完成"
