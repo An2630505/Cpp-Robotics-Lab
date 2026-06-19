@@ -1,8 +1,8 @@
 """
 sim_lane_keeping_real.py — 基于真实赛道中心线的 MPC 车道保持仿真
 
-管线: path1.jpg → map_parser → centerline → 闭环轨迹 → MPC + BicycleModel + KF
-离散化: scipy.linalg.expm (精确矩阵指数, 稳定)
+管线: path2.jpg → map_parser → centerline → 闭环轨迹 → MPC + BicycleModel + KF (C++ pnc)
+离散化: 前向欧拉 (与 pnc::BicycleModel::step 内部一致)
 
 用法: python pipeline/sim_lane_keeping_real.py
 """
@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import os, sys, math
 import numpy as np
-from scipy.linalg import expm
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
@@ -20,6 +19,10 @@ _self_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.dirname(_self_dir)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
+
+# pnc module (C++ MPC, BicycleModel, KF)
+sys.path.insert(0, os.path.join(_self_dir, "..", "build", "pnc"))
+import pnc
 
 # ========================== Vehicle Parameters ==========================
 MASS   = 1573.0
@@ -58,123 +61,6 @@ def build_cont_matrices():
         [-(2*C_AF*LF*LF+2*C_AR*LR*LR)/(IZ*VX)],
     ])
     return A, B1, B2
-
-
-def discretize(A: np.ndarray, B: np.ndarray, dt: float,
-               n_sub: int = 4) -> tuple[np.ndarray, np.ndarray]:
-    """
-    expm-based discretization with sub-step refinement for B_d.
-    A_d = expm(A*dt)
-    B_d = int_0^dt expm(A*tau) dt * B  (via numerical quadrature)
-    """
-    nx = A.shape[0]
-    A_d = expm(A * dt)
-    B_d = np.zeros_like(B)
-    n_steps = n_sub * 4
-    for k in range(n_steps):
-        tau = (k + 0.5) / n_steps * dt
-        B_d += expm(A * tau) @ B * (dt / n_steps)
-    return A_d, B_d
-
-
-# =====================================================================
-#  Bicycle model: discrete-time linear error dynamics + kinematic pose
-# =====================================================================
-
-class BicycleModel:
-    """x_{k+1} = A_d x_k + B1_d u + B2_d w  (error dynamics)
-       pose updated via kinematic bicycle model."""
-
-    def __init__(self, A_d, B1_d, B2_d):
-        self.A_d = A_d
-        self.B1_d = B1_d.ravel()   # (4,)
-        self.B2_d = B2_d.ravel()   # (4,)
-        self.x_err = np.zeros(4)
-        self.x_pos = 0.0
-        self.y_pos = 0.0
-        self.psi   = 0.0
-
-    def set_pose(self, x, y, psi):
-        self.x_pos, self.y_pos, self.psi = x, y, psi
-
-    def step(self, steer: float, w_curv: float):
-        """Discrete-time error dynamics + kinematic pose integration."""
-        self.x_err = (self.A_d @ self.x_err
-                      + self.B1_d * steer
-                      + self.B2_d * w_curv)
-        # kinematic bicycle pose update
-        beta = math.atan(LR / L_WB * math.tan(steer))
-        self.x_pos += VX * math.cos(self.psi + beta) * DT
-        self.y_pos += VX * math.sin(self.psi + beta) * DT
-        self.psi   += VX / L_WB * math.tan(steer) * DT
-
-
-# =====================================================================
-#  Kalman filter
-# =====================================================================
-
-class KalmanFilter:
-    def __init__(self, A_d, B1_d):
-        self.A_d = A_d
-        self.B1_d = B1_d
-        self.C = np.eye(4)
-        self.P = np.eye(4) * 1.0
-        self.Q = np.eye(4) * 0.01
-        self.R = np.diag([0.1, 0.1, 0.025, 0.005])
-        self.x_post = np.array([-0.3, 0.0, 0.05, 0.0])
-
-    def update(self, y_meas, u):
-        x_pred = self.A_d @ self.x_post + self.B1_d.ravel() * float(u[0])
-        P_pred = self.A_d @ self.P @ self.A_d.T + self.Q
-        S = self.C @ P_pred @ self.C.T + self.R
-        K = P_pred @ self.C.T @ np.linalg.inv(S)
-        self.x_post = x_pred + K @ (y_meas - self.C @ x_pred)
-        self.P = (np.eye(4) - K @ self.C) @ P_pred
-
-
-# =====================================================================
-#  MPC  (closed-form unconstrained QP)
-# =====================================================================
-
-class MPC:
-    """min_U  U^T H U + 2 x0^T E^T U   s.t. U = [u0; u1; ...; u_{N-1}]"""
-
-    def __init__(self, A_d, B1_d, C, Q, R, S_term, N_horizon):
-        nx, nu = A_d.shape[0], B1_d.shape[1]
-
-        # precompute A_d^i
-        A_pow = [np.eye(nx)]
-        for _ in range(N_horizon):
-            A_pow.append(A_d @ A_pow[-1])
-
-        # M: N*nx x N*nu  (lower-triangular block Toeplitz)
-        M = np.zeros((N_horizon * nx, N_horizon * nu))
-        for i in range(N_horizon):
-            for j in range(i + 1):
-                M[i*nx:(i+1)*nx, j*nu:(j+1)*nu] = C @ A_pow[i-j] @ B1_d
-
-        # G: N*nx x nx
-        G = np.zeros((N_horizon * nx, nx))
-        for i in range(N_horizon):
-            G[i*nx:(i+1)*nx, :] = C @ A_pow[i+1]
-
-        Qbar = np.kron(np.eye(N_horizon), Q)
-        Qbar[-nx:, -nx:] = S_term
-        Rbar = np.kron(np.eye(N_horizon), R)
-
-        self.H = M.T @ Qbar @ M + Rbar
-        self.H = (self.H + self.H.T) * 0.5
-        self.E = M.T @ Qbar @ G
-        self.nu = nu
-
-    def predict(self, y_ref, x_obs):
-        rhs = self.E @ (x_obs - y_ref)
-        try:
-            L = np.linalg.cholesky(self.H)
-            U = -np.linalg.solve(L.T, np.linalg.solve(L, rhs))
-        except np.linalg.LinAlgError:
-            U = -np.linalg.solve(self.H, rhs)
-        return U[:self.nu]
 
 
 def feedforward(kappa):
@@ -559,37 +445,38 @@ def run():
 
     # Step 4: discretize + init controllers
     A_c, B1_c, B2_c = build_cont_matrices()
-    A_d, B1_d_mat = discretize(A_c, B1_c, DT)
-    _,  B2_d_mat = discretize(A_c, B2_c, DT)
-    B1_d = B1_d_mat
-    B2_d = B2_d_mat
+    # 使用前向欧拉离散化 — 与 pnc.BicycleModel::step 内部一致
+    A_d = np.eye(4) + A_c * DT
+    B1_d = B1_c * DT
 
     # verify stability
     eig = np.abs(np.linalg.eigvals(A_d))
     print(f"  |eig(A_d)| = {[f'{e:.4f}' for e in sorted(eig, reverse=True)]}")
 
-    model = BicycleModel(A_d, B1_d, B2_d)
-    kf = KalmanFilter(A_d, B1_d)
+    # ---- pnc BicycleModel (C++ implementation, continuous matrices) ----
+    C_mat = np.eye(4)
+    D_mat = np.zeros((4, 1))
+    model = pnc.BicycleModel(A_c, B1_c, B2_c, C_mat, D_mat)
 
-    # 初始状态：起跑线节点 + 小偏差（模拟车辆不在正中间）
-    ref0 = traj.get_state(0.0)
+    # KF initialization (discrete matrices)
     init_e_y = -0.3
     init_e_psi = 0.05
-    model.set_pose(
-        ref0[0] - init_e_y * math.sin(ref0[2]),
-        ref0[1] + init_e_y * math.cos(ref0[2]),
-        ref0[2] + init_e_psi,
-    )
-    model.x_err = np.array([init_e_y, 0.0, init_e_psi, 0.0])
-    kf.x_post = model.x_err.copy()
+    init_state = np.array([init_e_y, 0.0, init_e_psi, 0.0])
+    P_kf = np.eye(4) * 1.0
+    Q_kf = np.eye(4) * 0.01
+    R_kf = np.diag([0.1, 0.1, 0.025, 0.005])
+    model.kf.init(A_d, B1_d, C_mat, P_kf, Q_kf, R_kf, init_state)
+    model.init(init_state)
 
+    # ---- pnc MPC (C++ implementation) ----
     Q = np.diag([80.0, 0.5, 15.0, 0.5])
     R = np.array([[0.1]])
     S_term = np.eye(4) * 1.0
-    mpc = MPC(A_d, B1_d, np.eye(4), Q, R, S_term, N_HORIZON)
+    mpc = pnc.MPC()
+    mpc.init(A_d, B1_d, C_mat, Q, R, S_term, N_HORIZON)
 
     target = np.zeros(4)
-    # 精确一圈：步数 × dt × Vx = 轨迹总长
+    # one lap: steps * dt * Vx = trajectory total length
     N_STEPS = int(traj.total_len / (VX * DT))
     N_STEPS = min(N_STEPS, 3000)
 
@@ -608,33 +495,24 @@ def run():
         ref = traj.get_state(s_travel)
         kappa_cur = float(ref[3])
 
-        # projection onto reference for error measurement
-        e_y_proj, psi_r = traj.project(model.x_pos, model.y_pos)
-        e_psi_proj = model.psi - psi_r
-        e_psi_proj = (e_psi_proj + math.pi) % (2*math.pi) - math.pi
+        # KF update (pnc) — 与 sim_lane_keeping.py 一致，用 model.y 作为测量
+        model.kf.update(model.y, np.array([steer]))
 
-        # feed measurements into error state
-        model.x_err[0] = e_y_proj
-        model.x_err[2] = e_psi_proj
-
-        # KF update
-        kf.update(model.x_err.copy(), np.array([steer]))
-
-        # MPC feedback + feedforward
-        u_fb = mpc.predict(target, kf.x_post)
+        # MPC feedback + feedforward (pnc)
+        u_fb = mpc.predict(target, model.kf.x_post)
         steer_ff = feedforward(kappa_cur)
         steer = float(u_fb[0] + steer_ff)
         steer = max(-MAX_STEER, min(MAX_STEER, steer))
 
-        # vehicle step
-        model.step(steer, kappa_cur * VX)
+        # vehicle step (pnc BicycleModel: error dynamics)
+        model.step(DT, kappa_cur * VX, np.array([steer]))
 
-        log.append((step, t, float(model.x_err[0]), float(model.x_err[1]),
-                    float(model.x_err[2]), float(model.x_err[3]), steer))
+        log.append((step, t, float(model.x[0]), float(model.x[1]),
+                    float(model.x[2]), float(model.x[3]), steer))
 
-        if step % 200 == 0 or step == N_STEPS-1:
-            print(f"  {step:4d}  e_y={model.x_err[0]:+.4f}m  "
-                  f"e_psi={math.degrees(model.x_err[2]):+.2f}deg  "
+        if step % 200 == 0 or step == N_STEPS - 1:
+            print(f"  {step:4d}  e_y={model.x[0]:+.4f}m  "
+                  f"e_psi={math.degrees(model.x[2]):+.2f}deg  "
                   f"str={math.degrees(steer):+.1f}deg")
 
     # ---- save ----

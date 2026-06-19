@@ -2,6 +2,8 @@
 #include <cmath>
 #include <algorithm>
 #include <iostream>
+#include <queue>
+#include <unordered_map>
 
 HybridAStar::HybridAStar(const std::vector<std::vector<int>>& grid)
     : grid_(grid), grid_size_(static_cast<int>(grid.size())),

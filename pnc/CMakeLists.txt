@@ -13,7 +13,7 @@ pybind11_add_module(pnc
     motion/map_parser/map_parser.cc
 )
 
-target_include_directories(pnc PRIVATE ${EIGEN3_INCLUDE_DIR})
+target_link_libraries(pnc PRIVATE Eigen3::Eigen)
 
 # ===== 单元测试 (每个测试独立编译) =====
 set(PNC_IMPL_SRCS
@@ -46,5 +46,5 @@ foreach(entry ${PNC_TESTS})
         ${PNC_IMPL_SRCS}
         ${test_file}
     )
-    target_include_directories(test_${test_name} PRIVATE ${EIGEN3_INCLUDE_DIR})
+    target_link_libraries(test_${test_name} PRIVATE Eigen3::Eigen)
 endforeach()

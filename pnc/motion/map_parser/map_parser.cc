@@ -339,7 +339,11 @@ void saveGraph(const RoadGraph& g, const std::string& path) {
 }
 
 void saveLaneCSVs(const RoadGraph& g, const std::string& dir) {
+#ifdef _WIN32
+    mkdir(dir.c_str());
+#else
     mkdir(dir.c_str(), 0755);
+#endif
     for (const auto& l : g.lanes) {
         std::string fp = dir + "/lane_" + std::to_string(l.id) + ".csv";
         std::ofstream out(fp);

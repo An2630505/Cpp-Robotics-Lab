@@ -2,6 +2,7 @@
 #define PNC_MOTION_HYBRID_ASTAR_H_
 
 #include <vector>
+#include <cmath>
 #include "../../common/types.h"
 
 // ========================== 内部搜索节点 ==========================
