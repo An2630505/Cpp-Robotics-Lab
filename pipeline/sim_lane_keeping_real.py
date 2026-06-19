@@ -553,6 +553,7 @@ def run():
     # Step 3: trajectory
     print("[3/4] Building reference trajectory ...")
     loop_pts = assemble_go_straight_circuit(graph)
+    loop_pts = loop_pts[::-1]  # 反向跑
     traj = Trajectory(loop_pts)
     print(f"  Length: {traj.total_len:.1f} m, {len(traj.points)} waypoints")
 

@@ -64,7 +64,9 @@ def build_traj_and_bounds():
         bounds["outer_boundary"], bounds["holes"],
         pixels_per_meter=12.8, smoothing_factor=0.02,
         starting_line=bounds.get("starting_line"))
-    return Trajectory(assemble_go_straight_circuit(graph)), bounds
+    loop_pts = assemble_go_straight_circuit(graph)
+    loop_pts = loop_pts[::-1]  # 反向跑
+    return Trajectory(loop_pts), bounds
 
 
 def precompute_car_polys(n_frames, skip, car_x, car_y, psi_car, steer):

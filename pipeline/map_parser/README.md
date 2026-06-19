@@ -91,17 +91,22 @@ python pipeline/map_parser/cli.py pipeline/map_parser/path2.png --has-starting-l
 ## 验证测试
 
 ```bash
-# 基础测试（无起跑线）
+# 基础测试（path2.png，默认检测起跑线）
 python pipeline/test_map_parser.py
 
-# 起跑线赛道测试
-python pipeline/test_map_parser.py --image pipeline/map_parser/path2.png --has-starting-line
+# 无起跑线赛道
+python pipeline/test_map_parser.py --image pipeline/map_parser/path1.jpg --no-has-starting-line
 
 # 含可视化
 python pipeline/test_map_parser.py --visualize
 
 # 保存输出
 python pipeline/test_map_parser.py --save output/test_result.json --save-plot output/test_plot.png
+
+# 完整参数
+python pipeline/test_map_parser.py --image pipeline/map_parser/path2.png \
+    --pixels-per-meter 12.8 --smoothing-factor 0.0 --has-starting-line \
+    --max-starting-line-area 200 --visualize
 ```
 
 ## 依赖

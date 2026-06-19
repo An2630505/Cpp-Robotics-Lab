@@ -59,6 +59,7 @@ python pipeline/centerline/cli.py boundaries.json --smoothing-factor 0.05 --prun
 | `resample_spacing_m` | `float \| None` | `None`→auto | 边弧长重采样间距(m) |
 | `render_resolution` | `int` | `1024` | 渲染掩码最大边长(px) |
 | `prune_spur_length_m` | `float` | `2.0` | 骨架毛刺剪除阈值(m) |
+| `starting_line` | `list[list[list[float]]] \| None` | `None` | 起跑线坐标，来自 `map_parser` 输出；用于定位 `start_node_id` |
 
 ### 返回值
 
@@ -99,26 +100,48 @@ python pipeline/centerline/cli.py boundaries.json --smoothing-factor 0.05 --prun
 from pipeline.sim_lane_keeping_real import assemble_go_straight_circuit
 
 graph = extract_centerline_graph(...)
-loop_pts = assemble_go_straight_circuit(graph)  # 返回 (N, 2) np.ndarray
+loop_pts = assemble_go_straight_circuit(graph)      # 返回 (N, 2) np.ndarray
+loop_pts = loop_pts[::-1]                            # 可选反向跑
 ```
 
-该算法通过"路口直行"策略自动拼接所有边：
-在每个物理汇合点选择出发方向与当前航向夹角最小的未访问边，适用于任意拓扑（单节点/多节点、自环/非自环）。
+### 拼接规则
+
+| 场景 | 策略 |
+|------|------|
+| **3 岔路口** (分叉/汇合) | 选最弯曲且 <90° 的候选边（入环岛） |
+| **4+ 岔路口** (十字路口) | 选航向偏差最小的候选边（直行） |
+| **2 岔路口** (普通连接) | 选航向偏差最小的候选边 |
+| **环岛边** | 自动识别最短的 3↔3 度节点间边，允许正反向各自独立通行 |
+| **起跑线** | 从 `metadata.start_node_id` 对应的边终端出发 |
+| **无候选** | 自动终止，输出已拼接的完整闭环 |
+
+### 工作原理
+
+1. 为每条边计算 A/B 两个终端的位置和切向角
+2. 将终端聚类为物理节点（KDTree），计算每个终端的岔路度数
+3. 从起跑线出发，每步在所有未访问且物理相邻的候选边中选择
+4. 非环岛边访问一次即双向屏蔽，环岛边可独立访问正反向
+5. 拼接为连续坐标数组，自动衔接相邻边（去重首点）
 
 ## 验证测试
 
 ```bash
-# 基础测试（path1.jpg，无起跑线）
+# 基础测试（path2.png，默认检测起跑线）
 python pipeline/test_centerline.py
 
-# 起跑线赛道（path2.png）
-python pipeline/test_centerline.py --image pipeline/map_parser/path2.png --has-starting-line
+# 无起跑线赛道
+python pipeline/test_centerline.py --image pipeline/map_parser/path1.jpg --no-has-starting-line
 
 # 含可视化
 python pipeline/test_centerline.py --visualize
 
 # 保存输出
 python pipeline/test_centerline.py --save output/test_graph.json --save-plot output/test_centerline.png
+
+# 完整参数
+python pipeline/test_centerline.py --image pipeline/map_parser/path2.png \
+    --pixels-per-meter 12.8 --smoothing-factor 0.02 --has-starting-line \
+    --max-starting-line-area 200 --visualize
 ```
 
 ## 依赖
