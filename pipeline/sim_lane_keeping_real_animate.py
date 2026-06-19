@@ -56,12 +56,14 @@ def build_traj_and_bounds():
     from pipeline.sim_lane_keeping_real import (
         assemble_go_straight_circuit, Trajectory,
     )
-    img = os.path.join(_self_dir, "map_parser", "path1.jpg")
+    img = os.path.join(_self_dir, "map_parser", "path2.png")
     bounds = parse_map(img, pixels_per_meter=12.8, smoothing_factor=0.0,
-                       num_control_points=200, resample_spacing_m=0.1)
+                       num_control_points=200, resample_spacing_m=0.1,
+                       has_starting_line=True)
     graph = extract_centerline_graph(
         bounds["outer_boundary"], bounds["holes"],
-        pixels_per_meter=12.8, smoothing_factor=0.02, resample_spacing_m=0.2)
+        pixels_per_meter=12.8, smoothing_factor=0.02,
+        starting_line=bounds.get("starting_line"))
     return Trajectory(assemble_go_straight_circuit(graph)), bounds
 
 

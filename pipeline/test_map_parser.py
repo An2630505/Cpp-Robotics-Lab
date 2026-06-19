@@ -55,6 +55,13 @@ def validate_result(result: dict) -> list[str]:
             gap = (dx * dx + dy * dy) ** 0.5
             issues.append(f"OK: Hole[{i}] {len(hole)} pts, gap = {gap:.4f}m")
 
+    # 2.5 Starting line
+    starting = result.get("starting_line", [])
+    if starting:
+        issues.append(f"INFO: Found {len(starting)} starting line stripe(s)")
+        for i, sl in enumerate(starting):
+            issues.append(f"OK: StartingLine[{i}] {len(sl)} pts")
+
     # 3. Metadata completeness
     for key in ["image_path", "image_size", "pixels_per_meter",
                 "threshold_used", "smoothing_factor"]:
@@ -100,6 +107,11 @@ def visualize(result: dict, save_path: str | None = None):
         hx, hy = zip(*hole)
         ax.plot(hx, hy, "r-", linewidth=1.0, label=f"Hole {i} ({len(hole)} pts)")
 
+    starting = result.get("starting_line", [])
+    for i, sl in enumerate(starting):
+        sx, sy = zip(*sl)
+        ax.plot(sx, sy, "g-", linewidth=2.0, label=f"StartLine {i} ({len(sl)} pts)")
+
     ax.set_aspect("equal")
     ax.set_xlabel("X (m)")
     ax.set_ylabel("Y (m)")
@@ -119,13 +131,17 @@ def visualize(result: dict, save_path: str | None = None):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verify map_parser module")
-    ap.add_argument("--image", default="pipeline/map_parser/path1.jpg")
+    ap.add_argument("--image", default="pipeline/map_parser/path2.png")
     ap.add_argument("--visualize", action="store_true",
                     help="Show matplotlib boundary plot")
     ap.add_argument("--save", default=None, help="Save JSON output to file")
     ap.add_argument("--save-plot", default=None, help="Save plot to file")
     ap.add_argument("--smoothing-factor", type=float, default=0.0)
     ap.add_argument("--pixels-per-meter", type=float, default=12.8)
+    ap.add_argument("--has-starting-line", action=argparse.BooleanOptionalAction, default=True,
+                    help="Enable starting line detection (default: on, use --no-has-starting-line to disable)")
+    ap.add_argument("--max-starting-line-area", type=int, default=200,
+                    help="Max pixel perimeter for starting line stripes")
     args = ap.parse_args()
 
     # Handle relative path: works when running from project root
@@ -142,6 +158,8 @@ def main() -> int:
         image_path=image_path,
         pixels_per_meter=args.pixels_per_meter,
         smoothing_factor=args.smoothing_factor,
+        has_starting_line=args.has_starting_line,
+        max_starting_line_area=args.max_starting_line_area,
     )
 
     issues = validate_result(result)
@@ -163,6 +181,8 @@ def main() -> int:
             "holes": result["holes"],
             "metadata": result["metadata"],
         }
+        if "starting_line" in result:
+            payload["starting_line"] = result["starting_line"]
         os.makedirs(os.path.dirname(os.path.abspath(args.save)) or ".", exist_ok=True)
         with open(args.save, "w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2, ensure_ascii=False)

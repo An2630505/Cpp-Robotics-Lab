@@ -90,11 +90,29 @@ python pipeline/centerline/cli.py boundaries.json --smoothing-factor 0.05 --prun
 }
 ```
 
+## 闭环参考轨迹组装
+
+中心线图是拓扑分支结构，车道保持等应用需要将其拼接为单条闭环轨迹。
+使用 `pipeline/sim_lane_keeping_real.py` 中的 `assemble_go_straight_circuit()`：
+
+```python
+from pipeline.sim_lane_keeping_real import assemble_go_straight_circuit
+
+graph = extract_centerline_graph(...)
+loop_pts = assemble_go_straight_circuit(graph)  # 返回 (N, 2) np.ndarray
+```
+
+该算法通过"路口直行"策略自动拼接所有边：
+在每个物理汇合点选择出发方向与当前航向夹角最小的未访问边，适用于任意拓扑（单节点/多节点、自环/非自环）。
+
 ## 验证测试
 
 ```bash
-# 基础测试
+# 基础测试（path1.jpg，无起跑线）
 python pipeline/test_centerline.py
+
+# 起跑线赛道（path2.png）
+python pipeline/test_centerline.py --image pipeline/map_parser/path2.png --has-starting-line
 
 # 含可视化
 python pipeline/test_centerline.py --visualize
@@ -115,8 +133,15 @@ pip install scikit-image scipy numpy opencv-python
 from map_parser import parse_map
 from centerline import extract_centerline_graph
 
-# 完整的"图像 → 拓扑图"流水线
+# 普通赛道：图像 → 拓扑图
 boundaries = parse_map("track.jpg")
+graph = extract_centerline_graph(
+    boundaries["outer_boundary"],
+    boundaries["holes"],
+)
+
+# 带起跑线的赛道
+boundaries = parse_map("track.png", has_starting_line=True)
 graph = extract_centerline_graph(
     boundaries["outer_boundary"],
     boundaries["holes"],

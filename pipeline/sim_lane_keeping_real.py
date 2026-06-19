@@ -315,102 +315,209 @@ def _adaptive_connect_threshold(edges: list[dict]) -> float:
 
 def assemble_go_straight_circuit(graph: dict) -> np.ndarray:
     """
-    Generic "go-straight" algorithm: walk all centerline edges,
-    at each physical junction picking the unvisited edge whose departure
-    direction best continues the current heading ("straight through").
+    Circuit assembly.
 
-    Works for any graph topology (self-loops, multi-node graphs, etc.)
-    because adjacency is determined by physical endpoint proximity,
-    not graph node IDs.
-
-    Returns concatenated loop points in order.
+    Rules:
+      - All edges are available in both fw and rv initially.
+      - Normal edges: visiting fw or rv consumes BOTH (single visit).
+      - The edge connecting the two 3-way forks with minimal length (e1):
+        fw and rv are independent (can be visited twice).
+      - At 3-way forks: pick the curviest branch <90deg (roundabout entry).
+      - At 4+ way crossroads: go straight (min angle diff).
+      - Stop when no connected unvisited direction remains.
     """
     edges = [e.copy() for e in graph["edges"]]
     for e in edges:
         _compute_edge_terminals(e)
 
-    n_total = len(edges)
-    if n_total == 0:
+    if len(edges) == 0:
         raise ValueError("Centerline graph has no edges")
-    if n_total == 1:
+    if len(edges) == 1:
         return np.array(edges[0]["points"])
 
     connect_thresh = _adaptive_connect_threshold(edges)
+    start_node = graph.get("metadata", {}).get("start_node_id")
 
-    visited: set[int] = set()
+    # ---- Junction degree ----
+    for e in edges:
+        for tag in ("A", "B"):
+            pos = e[f"{tag}_pos"]
+            deg = sum(1 for e2 in edges
+                      if float(np.linalg.norm(e2["A_pos"] - pos)) < connect_thresh
+                      or float(np.linalg.norm(e2["B_pos"] - pos)) < connect_thresh)
+            e[f"{tag}_jdeg"] = deg
+
+    # ---- Cluster terminals → physical junctions ----
+    all_positions = np.array([e["A_pos"] for e in edges] + [e["B_pos"] for e in edges])
+    from scipy.spatial import KDTree as _KDTree
+    _tree = _KDTree(all_positions)
+    _vis_set = set()
+    junction_indices: list[list[int]] = []
+    for i in range(len(all_positions)):
+        if i in _vis_set: continue
+        nb = _tree.query_ball_point(all_positions[i], connect_thresh)
+        _vis_set.update(nb)
+        junction_indices.append(list(nb))
+
+    def _junc_id(pos):
+        for ji, j_ids in enumerate(junction_indices):
+            if np.linalg.norm(pos - np.mean(all_positions[j_ids], axis=0)) < connect_thresh:
+                return ji
+        return -1
+
+    for e in edges:
+        e["A_jid"] = _junc_id(e["A_pos"])
+        e["B_jid"] = _junc_id(e["B_pos"])
+
+    # ---- Identify reusable edge (e1: shortest 3↔3 edge) ----
+    fork_pairs: dict[tuple[int, int], list[dict]] = {}
+    for e in edges:
+        if e["A_jdeg"] == 3 and e["B_jdeg"] == 3:
+            key = tuple(sorted((e["A_jid"], e["B_jid"])))
+            fork_pairs.setdefault(key, []).append(e)
+    reusable_id: int | None = None
+    for group in fork_pairs.values():
+        reusable_id = min(group, key=lambda x: x["length_m"])["id"]
+
+    # ---- Physical traversals: each edge gives 2, reusable gives 4 ----
+    # Each traversal: (edge, dep_tag, arr_tag, dep_psi, dep_pos, arr_in)
+    all_traversals: list[dict] = []
+    for e in edges:
+        for dep, arr in [("A", "B"), ("B", "A")]:
+            all_traversals.append({
+                "edge": e,
+                "dep": dep,
+                "arr": arr,
+                "dep_pos": e[f"{dep}_pos"],
+                "dep_psi": e[f"{dep}_out"],
+                "arr_pos": e[f"{arr}_pos"],
+                "arr_psi": e[f"{arr}_in"],
+            })
+        if e["id"] == reusable_id:
+            # Add a second pair for reusable edge
+            for dep, arr in [("A", "B"), ("B", "A")]:
+                all_traversals.append({
+                    "edge": e,
+                    "dep": dep,
+                    "arr": arr,
+                    "dep_pos": e[f"{dep}_pos"],
+                    "dep_psi": e[f"{dep}_out"],
+                    "arr_pos": e[f"{arr}_pos"],
+                    "arr_psi": e[f"{arr}_in"],
+                })
+
+    # ---- Starting point ----
+    first_idx: int = 0
+    if start_node is not None:
+        for e in edges:
+            for ti, trv in enumerate(all_traversals):
+                if trv["edge"] is not e: continue
+                if (e["from"] == start_node and trv["dep"] == "A") or \
+                   (e["to"] == start_node and trv["dep"] == "B"):
+                    first_idx = ti; break
+            else: continue
+            break
+
+    used_trav: set[int] = set()  # indices consumed
+
     segments: list[np.ndarray] = []
-    path_labels: list[str] = []
+    labels: list[str] = []
 
-    # Start from edge 0, forward
-    cur_e = edges[0]
-    visited.add(cur_e["id"])
-    segments.append(np.array(cur_e["points"]))
-    path_labels.append(f"e{cur_e['id']}")
-    cur_pos = cur_e["B_pos"].copy()
-    arr_psi = cur_e["B_in"]
+    trv = all_traversals[first_idx]
+    used_trav.add(first_idx)
+    eid = trv["edge"]["id"]
+    dep_tag, arr_tag = trv["dep"], trv["arr"]
+    print(f"  [DEBUG-start] e{eid}({dep_tag}>{arr_tag}) "
+          f"dep_psi={math.degrees(trv['dep_psi']):.1f}deg "
+          f"arr_psi={math.degrees(trv['arr_psi']):.1f}deg")
+    # Also block the paired direction for non-reusable edges
+    if eid != reusable_id:
+        for i, t2 in enumerate(all_traversals):
+            if t2["edge"]["id"] == eid:
+                used_trav.add(i)
 
-    while len(visited) < n_total:
-        # Collect unvisited candidates whose terminal is near current position
-        candidates: list[tuple[float, dict, str]] = []  # (angle_diff, edge, trav)
-        for cand in edges:
-            if cand["id"] in visited:
-                continue
+    pts = np.array(trv["edge"]["points"])
+    if dep_tag == "B":
+        pts = pts[::-1]
+    labels.append(f"e{eid}({dep_tag}>{arr_tag})")
+    cur_pos = trv["arr_pos"].copy()
+    arr_psi = trv["arr_psi"]
+    segments.append(pts)
 
-            dA = float(np.linalg.norm(cand["A_pos"] - cur_pos))
-            dB = float(np.linalg.norm(cand["B_pos"] - cur_pos))
+    for _iter in range(200):
+        # Junction degree
+        jd = sum(1 for e in edges
+                 if float(np.linalg.norm(e["A_pos"] - cur_pos)) < connect_thresh
+                 or float(np.linalg.norm(e["B_pos"] - cur_pos)) < connect_thresh)
 
-            if dA < connect_thresh:
-                diff = _angle_diff(cand["A_out"], arr_psi)
-                candidates.append((diff, cand, "fw"))
-            if dB < connect_thresh:
-                diff = _angle_diff(cand["B_out"], arr_psi)
-                candidates.append((diff, cand, "rv"))
+        # Connected unused traversals
+        candidates: list[tuple[float, dict, int]] = []  # (diff, trav, idx)
+        for i, trv in enumerate(all_traversals):
+            if i in used_trav: continue
+            eid = trv["edge"]["id"]
+            if eid != reusable_id:
+                # check if ANY traversal of this edge is already consumed
+                blocked = False
+                for j in used_trav:
+                    if all_traversals[j]["edge"]["id"] == eid:
+                        blocked = True; break
+                if blocked: continue
+            if float(np.linalg.norm(trv["dep_pos"] - cur_pos)) < connect_thresh:
+                diff = _angle_diff(trv["dep_psi"], arr_psi)
+                candidates.append((diff, trv, i))
 
         if not candidates:
-            # Relax: pick nearest unvisited edge endpoint
-            candidates_raw: list[tuple[float, dict, str]] = []
-            for cand in edges:
-                if cand["id"] in visited:
-                    continue
-                dA = float(np.linalg.norm(cand["A_pos"] - cur_pos))
-                dB = float(np.linalg.norm(cand["B_pos"] - cur_pos))
-                if dA <= dB:
-                    diff = _angle_diff(cand["A_out"], arr_psi)
-                    candidates_raw.append((diff, cand, "fw"))
-                else:
-                    diff = _angle_diff(cand["B_out"], arr_psi)
-                    candidates_raw.append((diff, cand, "rv"))
-            candidates_raw.sort(key=lambda x: x[0])
-            candidates = candidates_raw
+            break
 
-        # Pick best (smallest angle difference = "straight through")
         candidates.sort(key=lambda x: x[0])
-        best_diff, best_edge, trav = candidates[0]
 
-        # Orient and append
-        pts = np.array(best_edge["points"])
-        if trav == "rv":
+        # ---- DEBUG ----
+        print(f"          [DEBUG] iter={_iter}, jd={jd}, arr_psi={math.degrees(arr_psi):.1f}deg")
+        for d, t, i in candidates:
+            eid = t["edge"]["id"]
+            in_jd = t["edge"][f"{t['arr']}_jdeg"]
+            print(f"            cand: e{eid}({t['dep']}>{t['arr']}) "
+                  f"dep_psi={math.degrees(t['dep_psi']):.1f}deg "
+                  f"diff={math.degrees(d):.1f}deg "
+                  f"arr_jdeg={in_jd} "
+                  f"reus={'Y' if eid==reusable_id else 'N'}")
+        # ---- END DEBUG ----
+
+        # Decision
+        if jd >= 4:
+            best_diff, best_trv, best_i = candidates[0]
+        elif jd == 3:
+            forks = [(d, t, i) for d, t, i in candidates if d < math.radians(90)]
+            if forks:
+                forks.sort(key=lambda x: -x[0])
+                best_diff, best_trv, best_i = forks[0]
+            else:
+                candidates.sort(key=lambda x: x[0])
+                best_diff, best_trv, best_i = candidates[0]
+        else:
+            best_diff, best_trv, best_i = candidates[0]
+
+        # Consume
+        used_trav.add(best_i)
+        eid = best_trv["edge"]["id"]
+        if eid != reusable_id:
+            for i, t2 in enumerate(all_traversals):
+                if t2["edge"]["id"] == eid:
+                    used_trav.add(i)
+
+        pts = np.array(best_trv["edge"]["points"])
+        dep_tag = best_trv["dep"]
+        if dep_tag == "B":
             pts = pts[::-1]
-            path_labels.append(f"e{best_edge['id']}(rev)")
-        else:
-            path_labels.append(f"e{best_edge['id']}")
-
+        labels.append(f"e{eid}({dep_tag}>{best_trv['arr']})")
         segments.append(pts[1:])
-        visited.add(best_edge["id"])
-
-        # Update state
-        if trav == "fw":
-            cur_pos = pts[-1].copy()
-            arr_psi = best_edge["B_in"]
-        else:
-            cur_pos = pts[-1].copy()
-            arr_psi = best_edge["A_in"]
+        cur_pos = best_trv["arr_pos"].copy()
+        arr_psi = best_trv["arr_psi"]
 
     loop = np.concatenate(segments)
     total_m = float(np.sum(np.linalg.norm(np.diff(loop, axis=0), axis=1)))
-    print(f"  Circuit: {' -> '.join(path_labels)}")
-    print(f"          {len(loop)} pts, {total_m:.0f}m, "
-          f"{n_total} edges, connect_thresh={connect_thresh:.1f}m")
+    print(f"  Circuit: {' -> '.join(labels)}")
+    print(f"          {len(loop)} pts, {total_m:.0f}m, th={connect_thresh:.1f}m")
     return loop
 
 
@@ -427,10 +534,11 @@ def run():
     from pipeline.centerline import extract_centerline_graph
 
     # Step 1: parse boundaries
-    img = os.path.join(_self_dir, "map_parser", "path1.jpg")
+    img = os.path.join(_self_dir, "map_parser", "path2.png")
     print(f"\n[1/4] Parsing: {img}")
     bounds = parse_map(img, pixels_per_meter=12.8, smoothing_factor=0.0,
-                       num_control_points=200, resample_spacing_m=0.1)
+                       num_control_points=200, resample_spacing_m=0.1,
+                       has_starting_line=True)
     outer = np.array(bounds["outer_boundary"])
     holes = [np.array(h) for h in bounds["holes"]]
     print(f"  Outer: {len(outer)} pts, Holes: {len(holes)}")
@@ -439,7 +547,7 @@ def run():
     print("[2/4] Extracting centerline ...")
     graph = extract_centerline_graph(bounds["outer_boundary"], bounds["holes"],
                                      pixels_per_meter=12.8, smoothing_factor=0.02,
-                                     resample_spacing_m=0.2)
+                                     starting_line=bounds.get("starting_line"))
     print(f"  {len(graph['nodes'])} nodes, {len(graph['edges'])} edges")
 
     # Step 3: trajectory
@@ -462,14 +570,16 @@ def run():
     model = BicycleModel(A_d, B1_d, B2_d)
     kf = KalmanFilter(A_d, B1_d)
 
-    # initial condition: small lateral offset
+    # 初始状态：起跑线节点 + 小偏差（模拟车辆不在正中间）
     ref0 = traj.get_state(0.0)
+    init_e_y = -0.3
+    init_e_psi = 0.05
     model.set_pose(
-        ref0[0] - (-0.3)*math.sin(ref0[2]),
-        ref0[1] + (-0.3)*math.cos(ref0[2]),
-        ref0[2] + 0.05
+        ref0[0] - init_e_y * math.sin(ref0[2]),
+        ref0[1] + init_e_y * math.cos(ref0[2]),
+        ref0[2] + init_e_psi,
     )
-    model.x_err = np.array([-0.3, 0.0, 0.05, 0.0])
+    model.x_err = np.array([init_e_y, 0.0, init_e_psi, 0.0])
     kf.x_post = model.x_err.copy()
 
     Q = np.diag([80.0, 0.5, 15.0, 0.5])
@@ -478,9 +588,16 @@ def run():
     mpc = MPC(A_d, B1_d, np.eye(4), Q, R, S_term, N_HORIZON)
 
     target = np.zeros(4)
-    N_STEPS = min(int(traj.total_len / (VX * DT)), 2500)
+    # 精确一圈：步数 × dt × Vx = 轨迹总长
+    N_STEPS = int(traj.total_len / (VX * DT))
+    N_STEPS = min(N_STEPS, 3000)
 
-    print(f"\n[4/4] Simulating {N_STEPS} steps ({N_STEPS*DT:.1f}s) ...")
+    start_node = graph["metadata"].get("start_node_id")
+    start_info = ""
+    if start_node is not None:
+        sn = graph["nodes"][start_node]
+        start_info = f", start=node{start_node}({sn['x']:.1f},{sn['y']:.1f})"
+    print(f"\n[4/4] Simulating 1 lap: {N_STEPS} steps = {N_STEPS*DT:.1f}s = {N_STEPS*VX*DT:.1f}m{start_info}")
     log = []
     steer = 0.0
 
@@ -532,7 +649,9 @@ def run():
 
     final = log[-1]
     print(f"\n[OK] {out_txt}")
-    print(f"  Final: e_y={final[2]:.4f}m  e_psi={math.degrees(final[4]):.2f}deg")
+    print(f"  Completed 1 lap ({traj.total_len:.0f}m)")
+    print(f"  Final: e_y={final[2]:.4f}m  e_psi={math.degrees(final[4]):.2f}deg  "
+          f"s={N_STEPS*VX*DT:.0f}m / {traj.total_len:.0f}m")
 
     # ---- visualize ----
     visualize(log, traj, outer, holes)

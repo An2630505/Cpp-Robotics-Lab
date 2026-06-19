@@ -1,6 +1,6 @@
 # map_parser — 赛道几何边界提取
 
-从赛道渲染图中提取外边界 + 所有内部孔洞/岛屿轮廓。
+从赛道渲染图中提取外边界 + 孔洞/障碍物 + 起跑线标记。
 
 ## 快速开始
 
@@ -8,13 +8,17 @@
 import sys; sys.path.insert(0, 'pipeline')
 from map_parser import parse_map
 
-# 解析赛道图片
+# 解析普通赛道图片
 result = parse_map("pipeline/map_parser/path1.jpg")
 
 # 查看结果
 print(f"外边界: {len(result['outer_boundary'])} 个点")
 print(f"孔洞:   {len(result['holes'])} 个")
 print(f"元信息: {result['metadata']}")
+
+# 带起跑线的赛道
+result2 = parse_map("pipeline/map_parser/path2.png", has_starting_line=True)
+print(f"起跑线: {len(result2['starting_line'])} 条")
 
 # 保存为 JSON
 import json
@@ -33,6 +37,9 @@ python pipeline/map_parser/cli.py pipeline/map_parser/path1.jpg -o output/bounda
 
 # 调整参数
 python pipeline/map_parser/cli.py track.jpg --pixels-per-meter 10.0 --smoothing-factor 0.05 --threshold-method adaptive
+
+# 带起跑线的赛道
+python pipeline/map_parser/cli.py pipeline/map_parser/path2.png --has-starting-line
 ```
 
 ## API 参考
@@ -49,13 +56,16 @@ python pipeline/map_parser/cli.py track.jpg --pixels-per-meter 10.0 --smoothing-
 | `threshold_method` | `str` | `"otsu"` | `"otsu"` / `"adaptive"` / `"manual"` |
 | `manual_threshold` | `int \| None` | `None` | manual 方法时的 0-255 阈值 |
 | `min_contour_area` | `int` | `100` | 最小轮廓像素数（噪声过滤） |
+| `has_starting_line` | `bool` | `False` | 赛道内部有起跑线（黑白短横线）时设为 True |
+| `max_starting_line_area` | `int` | `200` | 起跑线条纹最大像素周长；≤此值=起跑线，>此值=障碍物 |
 
 ### 返回值
 
 ```python
 {
     "outer_boundary": [[float, float], ...],   # 外边界点序列
-    "holes": [[[float, float], ...], ...],     # 孔洞列表
+    "holes": [[[float, float], ...], ...],     # 孔洞/障碍物列表
+    "starting_line": [[[float, float], ...]],  # 起跑线列表（仅 has_starting_line=True）
     "metadata": {
         "image_path": str,
         "image_size": [int, int],      # [width, height] 像素
@@ -68,11 +78,24 @@ python pipeline/map_parser/cli.py track.jpg --pixels-per-meter 10.0 --smoothing-
 }
 ```
 
+### 起跑线检测
+
+赛道上有黑白相间的短横线（起跑线）时，启用 `has_starting_line=True`。
+解析器会按 `max_starting_line_area`（默认 200 px）将孔洞分类：
+
+| 分类 | 条件 | 处理方式 |
+|------|------|----------|
+| `"holes"` | 孔洞周长 > `max_starting_line_area` | 正常样条平滑 |
+| `"starting_line"` | 孔洞周长 ≤ `max_starting_line_area` | 保留原始像素坐标，不做平滑 |
+
 ## 验证测试
 
 ```bash
-# 基础测试
+# 基础测试（无起跑线）
 python pipeline/test_map_parser.py
+
+# 起跑线赛道测试
+python pipeline/test_map_parser.py --image pipeline/map_parser/path2.png --has-starting-line
 
 # 含可视化
 python pipeline/test_map_parser.py --visualize

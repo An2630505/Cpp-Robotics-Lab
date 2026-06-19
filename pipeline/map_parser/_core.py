@@ -55,11 +55,13 @@ def _binarize(
 def _extract_contours(
     binary: np.ndarray,
     min_contour_area: int = 100,
-) -> tuple[list[np.ndarray], list[np.ndarray], np.ndarray | None]:
+) -> tuple[list[tuple[int, np.ndarray]], list[tuple[int, np.ndarray]], np.ndarray | None]:
     """
     从二值图中提取并分类轮廓。
 
-    返回 (outer_boundaries, hole_boundaries, hierarchy)
+    返回 (outer_entries, hole_entries, hierarchy)
+    outer_entries / hole_entries 各为 [(contour_index, contour_points), ...]
+    hierarchy 为 OpenCV 原始层级数组。
     """
     contours, hierarchy = cv2.findContours(
         binary, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_NONE
@@ -67,19 +69,19 @@ def _extract_contours(
     if hierarchy is None:
         return [], [], None
 
-    outer_boundaries: list[np.ndarray] = []
-    hole_boundaries: list[np.ndarray] = []
+    outer_entries: list[tuple[int, np.ndarray]] = []
+    hole_entries: list[tuple[int, np.ndarray]] = []
 
     for i, cnt in enumerate(contours):
         if len(cnt) < min_contour_area:
             continue
         # hierarchy[0][i] = [next, prev, first_child, parent]
         if hierarchy[0][i][3] == -1:
-            outer_boundaries.append(cnt)
+            outer_entries.append((i, cnt))
         else:
-            hole_boundaries.append(cnt)
+            hole_entries.append((i, cnt))
 
-    return outer_boundaries, hole_boundaries, hierarchy
+    return outer_entries, hole_entries, hierarchy
 
 
 def _contour_to_world(
@@ -100,6 +102,8 @@ def parse_map(  # noqa: PLR0913
     threshold_method: str = "otsu",
     manual_threshold: int | None = None,
     min_contour_area: int = 100,
+    has_starting_line: bool = False,
+    max_starting_line_area: int = 200,
 ) -> dict:
     """
     从赛道渲染图中提取几何边界。
@@ -123,13 +127,20 @@ def parse_map(  # noqa: PLR0913
         threshold_method='manual' 时的 0-255 阈值。
     min_contour_area : int
         最小轮廓像素数，小于此值的视为噪声丢弃。
+    has_starting_line : bool
+        赛道内部有起跑线（黑白短横线）时设为 True。
+        启用后结合 max_starting_line_area 按周长区分起跑线与障碍物。
+    max_starting_line_area : int
+        起跑线条纹的最大像素周长。仅 has_starting_line=True 时生效。
+        ≤此值的孔洞归类为起跑线，>此值的归类为障碍物。默认 200。
 
     返回
     ----
     dict — 可直接 json.dumps:
         {
             "outer_boundary": [[x, y], ...],   # 外边界，shape (M, 2)
-            "holes": [ [[x,y],...], ... ],      # 孔洞列表
+            "holes": [ [[x,y],...], ... ],      # 孔洞/障碍物列表
+            "starting_line": [ [[x,y],...] ],   # (仅 has_starting_line=True) 起跑线
             "metadata": { ... }
         }
     """
@@ -146,11 +157,13 @@ def parse_map(  # noqa: PLR0913
                                     manual_threshold=manual_threshold)
 
     # --- Step 3 + 4: 轮廓提取 + 分类 ---
-    outer_list, hole_list, _ = _extract_contours(binary, min_contour_area)
+    outer_entries, hole_entries, hierarchy = _extract_contours(
+        binary, min_contour_area
+    )
 
     # --- 转换为世界坐标 ---
-    outer_world = [_contour_to_world(c, pixels_per_meter) for c in outer_list]
-    hole_world = [_contour_to_world(c, pixels_per_meter) for c in hole_list]
+    outer_world = [_contour_to_world(c, pixels_per_meter) for _, c in outer_entries]
+    hole_world = [_contour_to_world(c, pixels_per_meter) for _, c in hole_entries]
 
     # --- Step 5: 样条平滑 ---
     resample_sp = resample_spacing_m
@@ -159,27 +172,56 @@ def parse_map(  # noqa: PLR0913
 
     # 取第一条（也是唯一一条）外边界。多外边界取其最大者。
     outer_raw: np.ndarray | None = None
+    outer_contour_idx: int = -1
     if outer_world:
         if len(outer_world) > 1:
-            # 按周长选最大的
             best_idx = max(
                 range(len(outer_world)),
                 key=lambda i: len(outer_world[i]),
             )
             outer_raw = outer_world[best_idx]
+            outer_contour_idx = outer_entries[best_idx][0]
         else:
             outer_raw = outer_world[0]
+            outer_contour_idx = outer_entries[0][0]
+
+    # 只保留属于选中外边界的孔洞（过滤其他外边界下的孔洞）
+    if hierarchy is not None and outer_contour_idx >= 0:
+        hole_world = [
+            hw for hw, (ci, _) in zip(hole_world, hole_entries)
+            if hierarchy[0][ci][3] == outer_contour_idx
+        ]
+        hole_list_hierarchy = [
+            hc for (ci, hc) in hole_entries
+            if hierarchy[0][ci][3] == outer_contour_idx
+        ]
+    else:
+        hole_list_hierarchy = [hc for _, hc in hole_entries]
+
+    # 起跑线：保留原始像素轮廓，不做样条平滑（按周长区分障碍物）
+    starting_line_world: list[np.ndarray] = []
+    obstacle_hole_world: list[np.ndarray] = []
+
+    if has_starting_line:
+        # hole_world 与 hole_entries_hierarchy 一一对应，用原始轮廓周长分类
+        for hw, hc in zip(hole_world, hole_list_hierarchy):
+            if len(hc) <= max_starting_line_area:
+                starting_line_world.append(hw)
+            else:
+                obstacle_hole_world.append(hw)
+    else:
+        obstacle_hole_world = hole_world
 
     smoothed_outer, smoothed_holes = smooth_all_contours(
         outer_raw,
-        hole_world,
+        obstacle_hole_world,
         smoothing_factor=smoothing_factor,
         num_control_points=num_control_points,
         resample_spacing=resample_sp,
     )
 
     # --- 组装返回 ---
-    return {
+    result = {
         "outer_boundary": (
             smoothed_outer.tolist() if smoothed_outer is not None else []
         ),
@@ -188,9 +230,12 @@ def parse_map(  # noqa: PLR0913
             "image_path": image_path,
             "image_size": [w, h],
             "pixels_per_meter": pixels_per_meter,
-            "num_outer_contours_found": len(outer_list),
-            "num_holes_found": len(hole_list),
+            "num_outer_contours_found": len(outer_entries),
+            "num_holes_found": len(hole_world),
             "threshold_used": thresh_used,
             "smoothing_factor": smoothing_factor,
         },
     }
+    if has_starting_line:
+        result["starting_line"] = [sl.tolist() for sl in starting_line_world]
+    return result

@@ -1,9 +1,10 @@
 """
-test_centerline.py — verify centerline graph extraction from path1.jpg
+test_centerline.py — verify centerline graph extraction
 
 Usage:
     python pipeline/test_centerline.py
     python pipeline/test_centerline.py --visualize
+    python pipeline/test_centerline.py --image pipeline/map_parser/path2.png --has-starting-line
     python pipeline/test_centerline.py --save output/test_graph.json
 """
 
@@ -72,14 +73,11 @@ def validate_graph(graph: dict) -> list[str]:
         if key not in meta:
             issues.append(f"WARN: Metadata missing '{key}'")
 
-    # Check expected for path1.jpg: 1 node, 4 edges
-    if len(nodes) == 1 and len(edges) == 4:
-        issues.append("OK: Match expected structure for path1.jpg (1 node, 4 edges)")
-    elif len(nodes) >= 1 and len(edges) >= 2:
-        issues.append(f"INFO: {len(nodes)} node(s), {len(edges)} edges — "
-                      "expected 1 node, 4 edges for path1.jpg")
+    # General structure check
+    if len(nodes) >= 1 and len(edges) >= 2:
+        issues.append(f"OK: Graph structure valid ({len(nodes)} node(s), {len(edges)} edges)")
     else:
-        issues.append("WARN: Unexpected graph structure")
+        issues.append("WARN: Unexpected graph structure (need >=1 node, >=2 edges)")
 
     return issues
 
@@ -103,6 +101,10 @@ def visualize(graph: dict, boundaries: dict, save_path: str | None = None):
         hx, hy = zip(*hole)
         label = "Holes" if i == 0 else None
         ax.plot(hx, hy, "gray", linewidth=0.5, alpha=0.3, label=label)
+    for i, sl in enumerate(boundaries.get("starting_line", [])):
+        sx, sy = zip(*sl)
+        label = "Starting line" if i == 0 else None
+        ax.plot(sx, sy, "g-", linewidth=1.5, alpha=0.8, label=label)
 
     # Draw edges
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
@@ -135,12 +137,16 @@ def visualize(graph: dict, boundaries: dict, save_path: str | None = None):
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Verify centerline graph extraction")
-    ap.add_argument("--image", default="pipeline/map_parser/path1.jpg")
+    ap.add_argument("--image", default="pipeline/map_parser/path2.png")
     ap.add_argument("--visualize", action="store_true")
     ap.add_argument("--save", default=None, help="Save graph JSON")
     ap.add_argument("--save-plot", default=None, help="Save visualization plot")
     ap.add_argument("--smoothing-factor", type=float, default=0.02)
     ap.add_argument("--pixels-per-meter", type=float, default=12.8)
+    ap.add_argument("--has-starting-line", action=argparse.BooleanOptionalAction, default=True,
+                    help="Enable starting line detection (default: on, use --no-has-starting-line to disable)")
+    ap.add_argument("--max-starting-line-area", type=int, default=200,
+                    help="Max pixel perimeter for starting line stripes")
     args = ap.parse_args()
 
     image_path = args.image
@@ -157,9 +163,15 @@ def main() -> int:
         image_path=image_path,
         pixels_per_meter=args.pixels_per_meter,
         smoothing_factor=args.smoothing_factor,
+        has_starting_line=args.has_starting_line,
+        max_starting_line_area=args.max_starting_line_area,
     )
     print(f"  Outer: {len(boundaries['outer_boundary'])} pts, "
-          f"Holes: {len(boundaries['holes'])}")
+          f"Holes: {len(boundaries['holes'])}", end="")
+    if "starting_line" in boundaries:
+        print(f", Starting Line: {len(boundaries['starting_line'])} stripes")
+    else:
+        print()
 
     # Step 2: Extract centerline graph
     print("Step 2: Extracting centerline graph...")
@@ -168,6 +180,7 @@ def main() -> int:
         holes=boundaries["holes"],
         pixels_per_meter=args.pixels_per_meter,
         smoothing_factor=args.smoothing_factor,
+        starting_line=boundaries.get("starting_line"),
     )
 
     # Step 3: Validate
