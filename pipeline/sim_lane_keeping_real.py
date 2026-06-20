@@ -420,7 +420,7 @@ def run():
     from pipeline.centerline import extract_centerline_graph
 
     # Step 1: parse boundaries
-    img = os.path.join(_self_dir, "map_parser", "path2.png")
+    img = os.path.join(_project_root, "map", "path2.png")
     print(f"\n[1/4] Parsing: {img}")
     bounds = parse_map(img, pixels_per_meter=12.8, smoothing_factor=0.0,
                        num_control_points=200, resample_spacing_m=0.1,
@@ -564,7 +564,7 @@ def visualize(log, traj, outer, holes):
     lry = y_ref - LANE_WIDTH/2 * np.cos(psi_ref)
 
     fig = plt.figure(figsize=(20, 14))
-    fig.suptitle("MPC Lane Keeping on Real Track (path1.jpg)", fontsize=16)
+    fig.suptitle("MPC Lane Keeping on Real Track (path2.png)", fontsize=16)
 
     # --- top-down map ---
     ax = fig.add_subplot(2, 3, (1, 4))

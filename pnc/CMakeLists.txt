@@ -11,6 +11,8 @@ pybind11_add_module(pnc
     motion/hybrid_astar/hybrid_astar.cc
     motion/mpc_planner/mpc_planner.cc
     motion/map_parser/map_parser.cc
+    motion/safe_corridor/safe_corridor.cc
+    motion/bspline/bspline.cc
 )
 
 target_link_libraries(pnc PRIVATE Eigen3::Eigen)
@@ -27,6 +29,8 @@ set(PNC_IMPL_SRCS
     motion/hybrid_astar/hybrid_astar.cc
     motion/mpc_planner/mpc_planner.cc
     motion/map_parser/map_parser.cc
+    motion/safe_corridor/safe_corridor.cc
+    motion/bspline/bspline.cc
 )
 
 set(PNC_TESTS
@@ -36,6 +40,9 @@ set(PNC_TESTS
     "bicycle_model:motion/bicycle_model/bicycle_model_test.cc"
     "path:motion/path/path_test.cc"
     "astar:motion/astar/astar_test.cc"
+    "hybrid_astar:motion/hybrid_astar/hybrid_astar_test.cc"
+    "safe_corridor:motion/safe_corridor/safe_corridor_test.cc"
+    "bspline:motion/bspline/bspline_test.cc"
 )
 
 foreach(entry ${PNC_TESTS})

@@ -41,8 +41,14 @@ public:
     void setGoalThTol(double t)  { goal_th_tol_ = t; }
     void setThetaBins(int b)     { theta_bins_ = b; }
     void setXYBin(double b)      { xy_bin_ = b; }
+    void setVehicleDims(double half_width, double forward, double rearward) {
+        hw_ = half_width; fwd_ = forward; rev_ = rearward;
+    }
 
     std::vector<Pose> plan(const Pose& start, const Pose& goal);
+    std::vector<Pose> planToGate(const Pose& start,
+                                  const Vec2d& gate_a,
+                                  const Vec2d& gate_b);
 
 private:
     std::vector<std::vector<int>> grid_;
@@ -50,6 +56,11 @@ private:
     double cell_size_, wheelbase_, max_steer_, arc_length_;
     int num_steer_, theta_bins_;
     double xy_bin_, goal_xy_tol_, goal_th_tol_;
+    double hw_ = 0.3, fwd_ = 0.3, rev_ = 0.3;
+
+    static double distToSegment(double px, double py,
+                                double ax, double ay,
+                                double bx, double by);
 
     Pose step(const Pose& from, double steer, double arc) const;
     bool collides(const Pose& p) const;

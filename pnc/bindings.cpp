@@ -13,6 +13,8 @@
 #include "motion/hybrid_astar/hybrid_astar.h"
 #include "motion/mpc_planner/mpc_planner.h"
 #include "motion/map_parser/map_parser.h"
+#include "motion/safe_corridor/safe_corridor.h"
+#include "motion/bspline/bspline.h"
 
 namespace py = pybind11;
 
@@ -120,6 +122,17 @@ PYBIND11_MODULE(pnc, m) {
         .def_readwrite("y", &Pose::y)
         .def_readwrite("theta", &Pose::theta);
 
+    py::class_<Vec2d>(m, "Vec2d")
+        .def(py::init<>())
+        .def_readwrite("x", &Vec2d::x)
+        .def_readwrite("y", &Vec2d::y);
+
+    py::class_<CorridorSection>(m, "CorridorSection")
+        .def(py::init<>())
+        .def_readwrite("center", &CorridorSection::center)
+        .def_readwrite("left", &CorridorSection::left)
+        .def_readwrite("right", &CorridorSection::right);
+
     // ---- A* (wrapper: 用 row/col 替代 Point 避免 segfault) ----
     py::class_<AStar>(m, "AStar")
         .def(py::init([](const std::vector<std::vector<int>>& grid,
@@ -141,7 +154,13 @@ PYBIND11_MODULE(pnc, m) {
         .def("set_cell_size", &HybridAStar::setCellSize)
         .def("set_goal_xy_tol", &HybridAStar::setGoalXYTol)
         .def("set_goal_th_tol", &HybridAStar::setGoalThTol)
-        .def("plan", &HybridAStar::plan, py::arg("start"), py::arg("goal"));
+        .def("set_theta_bins", &HybridAStar::setThetaBins)
+        .def("set_xy_bin", &HybridAStar::setXYBin)
+        .def("set_vehicle_dims", &HybridAStar::setVehicleDims,
+             py::arg("half_width"), py::arg("forward"), py::arg("rearward"))
+        .def("plan", &HybridAStar::plan, py::arg("start"), py::arg("goal"))
+        .def("plan_to_gate", &HybridAStar::planToGate,
+             py::arg("start"), py::arg("gate_a"), py::arg("gate_b"));
 
     // ---- MPCTrajectoryPlanner (output refs wrapped → tuple) ----
     py::class_<MPCTrajectoryPlanner>(m, "MPCTrajectoryPlanner")
@@ -156,6 +175,31 @@ PYBIND11_MODULE(pnc, m) {
             auto traj = self.plan(ref_path, velocities, steers);
             return py::make_tuple(traj, velocities, steers);
         }, py::arg("ref_path"));
+
+    // ---- SafeCorridor ----
+    py::class_<SafeCorridor>(m, "SafeCorridor")
+        .def(py::init<>())
+        .def("set_margin", &SafeCorridor::setMargin, py::arg("m"))
+        .def("set_sample_interval", &SafeCorridor::setSampleInterval,
+             py::arg("ds"))
+        .def("build", &SafeCorridor::build,
+             py::arg("ref_path"), py::arg("outer"), py::arg("holes"));
+
+    // ---- BSpline ----
+    py::class_<BSplineParams>(m, "BSplineParams")
+        .def(py::init<>())
+        .def_readwrite("degree", &BSplineParams::degree)
+        .def_readwrite("num_control_points", &BSplineParams::num_control_points)
+        .def_readwrite("closed", &BSplineParams::closed)
+        .def_readwrite("resample_spacing", &BSplineParams::resample_spacing);
+
+    py::class_<BSpline>(m, "BSpline")
+        .def(py::init<>())
+        .def("set_params", &BSpline::setParams, py::arg("p"))
+        .def("get_params", &BSpline::getParams)
+        .def("fit", &BSpline::fit,
+             py::arg("ref_path"), py::arg("corridors"))
+        .def("resample", &BSpline::resample, py::arg("path"));
 
     // ---- Map Parser (只暴露 void 返回/Save 函数; 复杂 struct 暂不注册) ----
     m.def("dilate_grid", &dilateGrid, py::arg("grid"), py::arg("radius"));

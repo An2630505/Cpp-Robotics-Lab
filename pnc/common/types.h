@@ -22,4 +22,16 @@ struct GridData {
     int size;
 };
 
+/// 二维向量 (连续世界坐标)
+struct Vec2d {
+    double x, y;
+};
+
+/// 安全走廊截面
+struct CorridorSection {
+    Vec2d center;  // 参考路径上的采样点
+    Vec2d left;    // 左边界点 (世界坐标)
+    Vec2d right;   // 右边界点 (世界坐标)
+};
+
 #endif  // PNC_COMMON_TYPES_H_

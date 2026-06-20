@@ -14,8 +14,7 @@ HybridAStar::HybridAStar(const std::vector<std::vector<int>>& grid)
 
 bool HybridAStar::collides(const Pose& p) const {
     double c = std::cos(p.theta), s = std::sin(p.theta);
-    double hw = 0.3, fwd = 0.3, rev = 0.3;
-    double crn[4][2] = {{fwd, hw}, {fwd, -hw}, {-rev, hw}, {-rev, -hw}};
+    double crn[4][2] = {{fwd_, hw_}, {fwd_, -hw_}, {-rev_, hw_}, {-rev_, -hw_}};
     double mx = 1e9, Mx = -1e9, my = 1e9, My = -1e9;
     for (int i = 0; i < 4; i++) {
         double wx = c * crn[i][0] - s * crn[i][1] + p.x;
@@ -33,7 +32,7 @@ bool HybridAStar::collides(const Pose& p) const {
             double cx = ci * cell_size_ + 0.1, cy = r * cell_size_ + 0.1;
             double dx = cx - p.x, dy = cy - p.y;
             double bx = c * dx + s * dy, by = -s * dx + c * dy;
-            if (bx >= -rev && bx <= fwd && by >= -hw && by <= hw) return true;
+            if (bx >= -rev_ && bx <= fwd_ && by >= -hw_ && by <= hw_) return true;
         }
     return false;
 }
@@ -53,6 +52,139 @@ bool HybridAStar::arcCollides(const Pose& from, double steer, double arc) const 
     for (int i = 0; i <= n; i++)
         if (collides(step(from, steer, arc * i / n))) return true;
     return false;
+}
+
+double HybridAStar::distToSegment(double px, double py,
+                                   double ax, double ay,
+                                   double bx, double by) {
+    double abx = bx - ax, aby = by - ay;
+    double apx = px - ax, apy = py - ay;
+    double ab2 = abx * abx + aby * aby;
+    if (ab2 < 1e-12) return std::hypot(px - ax, py - ay);
+    double t = (apx * abx + apy * aby) / ab2;
+    if (t < 0.0) return std::hypot(px - ax, py - ay);
+    if (t > 1.0) return std::hypot(px - bx, py - by);
+    double cx = ax + t * abx, cy = ay + t * aby;
+    return std::hypot(px - cx, py - cy);
+}
+
+std::vector<Pose> HybridAStar::planToGate(const Pose& start,
+                                            const Vec2d& gate_a,
+                                            const Vec2d& gate_b) {
+    if (collides(start)) return {};
+
+    // ---- Dijkstra 启发式 (多源: gate 线段穿过的所有栅格) ----
+    std::vector<std::vector<double>> h2d(grid_size_,
+        std::vector<double>(grid_size_, 1e9));
+    {
+        using Cell = std::pair<double, std::pair<int, int>>;
+        std::priority_queue<Cell, std::vector<Cell>, std::greater<Cell>> pq;
+
+        // Bresenham 线算法枚举 gate 线段穿过的所有栅格
+        int ga_r = (int)(gate_a.y / cell_size_);
+        int ga_c = (int)(gate_a.x / cell_size_);
+        int gb_r = (int)(gate_b.y / cell_size_);
+        int gb_c = (int)(gate_b.x / cell_size_);
+
+        int dx = std::abs(gb_c - ga_c), dy = -std::abs(gb_r - ga_r);
+        int sx = ga_c < gb_c ? 1 : -1, sy = ga_r < gb_r ? 1 : -1;
+        int err = dx + dy, cx = ga_c, cy = ga_r;
+        while (true) {
+            if (cx >= 0 && cx < grid_size_ && cy >= 0 && cy < grid_size_
+                && grid_[cy][cx] == 0) {
+                h2d[cy][cx] = 0;
+                pq.push({0, {cy, cx}});
+            }
+            if (cx == gb_c && cy == gb_r) break;
+            int e2 = 2 * err;
+            if (e2 >= dy) { err += dy; cx += sx; }
+            if (e2 <= dx) { err += dx; cy += sy; }
+        }
+
+        int d8[8][2] = {{-1,0},{1,0},{0,-1},{0,1},{-1,-1},{-1,1},{1,-1},{1,1}};
+        double c8[8] = {1,1,1,1,1.414,1.414,1.414,1.414};
+        while (!pq.empty()) {
+            auto t = pq.top(); pq.pop();
+            int r = t.second.first, c = t.second.second;
+            if (t.first > h2d[r][c] + 1e-6) continue;
+            for (int d = 0; d < 8; d++) {
+                int nr = r + d8[d][0], nc = c + d8[d][1];
+                if (nr < 0 || nr >= grid_size_ || nc < 0 || nc >= grid_size_)
+                    continue;
+                if (grid_[nr][nc] == 1) continue;
+                double nd = t.first + c8[d];
+                if (nd < h2d[nr][nc]) { h2d[nr][nc] = nd; pq.push({nd, {nr, nc}}); }
+            }
+        }
+    }
+
+    // ---- 转向角 ----
+    std::vector<double> steers;
+    for (int i = 0; i < num_steer_; i++)
+        steers.push_back((i - num_steer_ / 2) * max_steer_ / (num_steer_ / 2));
+
+    // ---- A* 搜索 ----
+    std::priority_queue<HNode, std::vector<HNode>, std::greater<HNode>> open;
+    std::unordered_map<int, double> best_g;
+    std::vector<HNode> closed;
+
+    int sr = (int)(start.y / cell_size_), sc = (int)(start.x / cell_size_);
+    HNode sn = makeNode(start.x, start.y, start.theta);
+    sn.g = 0;
+    sn.h = h2d[sr][sc] * cell_size_;
+    sn.f = sn.g + sn.h;
+    sn.parent = -1;
+    open.push(sn);
+    best_g[sn.key()] = 0;
+
+    while (!open.empty()) {
+        HNode cur = open.top(); open.pop();
+        auto it = best_g.find(cur.key());
+        if (it != best_g.end() && cur.g > it->second + 1e-6) continue;
+        int cur_idx = closed.size();
+        closed.push_back(cur);
+
+        // Goal check: 到 gate 线段的距离 < 阈值
+        double d_to_seg = distToSegment(cur.x, cur.y,
+                                         gate_a.x, gate_a.y,
+                                         gate_b.x, gate_b.y);
+        if (d_to_seg < goal_xy_tol_) {
+            std::vector<Pose> path;
+            int idx = closed.size() - 1;
+            while (idx >= 0) {
+                path.push_back({closed[idx].x, closed[idx].y, closed[idx].theta});
+                idx = closed[idx].parent;
+            }
+            std::reverse(path.begin(), path.end());
+            return path;
+        }
+
+        for (double steer : steers) {
+            Pose np = step({cur.x, cur.y, cur.theta}, steer, arc_length_);
+            double map_w = grid_size_ * cell_size_;
+            if (np.x < 0 || np.x >= map_w || np.y < 0 || np.y >= map_w) continue;
+            if (arcCollides({cur.x, cur.y, cur.theta}, steer, arc_length_)) continue;
+
+            double cost = arc_length_ + std::abs(steer) * arc_length_ * 0.3;
+            double ng = cur.g + cost;
+            int hr = (int)(np.y / cell_size_), hc = (int)(np.x / cell_size_);
+            double hv = h2d[hr][hc];
+            if (hv > 1e8) continue;
+
+            HNode child = makeNode(np.x, np.y, np.theta);
+            child.g = ng;
+            child.parent = cur_idx;
+            child.h = hv * cell_size_;
+            child.f = ng + child.h;
+
+            int k = child.key();
+            auto it2 = best_g.find(k);
+            if (it2 != best_g.end() && ng >= it2->second - 1e-6) continue;
+            best_g[k] = ng;
+            open.push(child);
+        }
+    }
+    return {};
 }
 
 std::vector<Pose> HybridAStar::plan(const Pose& start, const Pose& goal) {
