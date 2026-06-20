@@ -23,6 +23,8 @@ pipeline/
 ├── sim_lane_keeping_animate.py       #   动画回放
 ├── sim_lane_keeping_real.py          # ★ 真实赛道 MPC 车道保持 (纯 Python)
 ├── sim_lane_keeping_real_animate.py  # ★ 真实赛道动画
+├── sim_trajectory_optimization.py     # ★ 轨迹优化 (HA* + B-Spline + MPC)
+├── sim_trajectory_optimization_animate.py # ★ 轨迹优化动画
 ├── sim_path_planning.py              # A* / Hybrid A* 路径规划 (C++ pnc)
 ├── sim_path_planning_visualize.py
 ├── sim_navigation.py                 # 全局导航仿真 (C++ pnc)
@@ -166,6 +168,71 @@ loop_pts = loop_pts[::-1]  # 反向跑
 - **4+ 路口** — 选航向偏差最小的分支直行
 - **环岛边** — 自动识别最短的 3↔3 度边，允许双向通行
 - **起跑线** — 从 `start_node_id` 出发开始拼接
+
+---
+
+## 轨迹优化 (Trajectory Optimization)
+
+**C++ 依赖，完整 PNC 管线。** 从地图到 MPC 控制，7 步闭环仿真。
+
+### sim_trajectory_optimization — Hybrid A* + B-Spline + MPC
+
+```bash
+# 编译 C++ 库后运行
+./build_pnc.sh
+python pipeline/sim_trajectory_optimization.py
+
+# 动画回放
+python pipeline/sim_trajectory_optimization_animate.py
+```
+
+**管线流程：**
+
+```
+path2.png → map_parser → centerline → circuit assembly
+    → occupancy grid → Gate 生成 → Hybrid A* 分段门规划
+    → SafeCorridor 构建 → B-Spline 拟合平滑 → 等弧长重采样
+    → MPC 轨迹跟踪仿真
+```
+
+| 步骤 | 模块 | 说明 |
+|------|------|------|
+| 1 | map_parser | 赛道边界提取 + 起跑线检测 |
+| 2 | centerline | 中心线拓扑图提取 |
+| 3 | circuit assembly | 闭环回路拼接 |
+| 4 | occupancy grid | 扫描线填充 + 膨胀构建栅格地图 |
+| 5 | Hybrid A* Gate 规划 | 沿中心线 15m 间距生成 Gate，逐段运动学规划 |
+| 6 | SafeCorridor + B-Spline | 安全走廊构建 → clamped B 样条拟合 → 等弧长重采样 |
+| 7 | MPC 仿真 | 误差动力学模型 + 卡尔曼滤波 + 曲率前馈 |
+
+**核心参数：**
+
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| 栅格分辨率 | 0.2 m | 占用栅格 cell size |
+| 安全边距 | 0.5 m | 障碍物膨胀距离 |
+| Gate 间距 | 15 m | 沿中心线等弧长采样 |
+| HA* 单车步长 | 0.6 m | 运动学扩展弧长 |
+| 车辆尺寸 | hw=0.5, fwd=0.8, rev=0.5 m | 碰撞检测 bounding box |
+| B-Spline 阶数 | 3 (cubic) | clamped 开放曲线 |
+| B-Spline 控制点 | 50 | 最小二乘拟合自由度 |
+| 重采样间距 | 0.5 m | 等弧长输出间距 |
+| MPC 预测时域 | N=40 | 闭式无约束 QP |
+| 仿真速度 | 10 m/s | DT=0.1s |
+| 最大转向角 | ±30° | 运动学约束 |
+
+**B-Spline 实现要点：**
+
+- **Clamped 开放曲线**：轨迹起止于 Gate，不强制闭环
+- **Cox-de Boor 递推基函数**：正确支持 clamped knot vector 右端点插值
+- **走廊软约束投影**：2 次迭代，超出走廊边界 → 投影回边界 → 重新拟合
+- **首尾平滑**：延伸路径 + 截断法，避免 clamped 样条端点切线敏感
+
+**输出：**
+- `output/sim_trajectory_optimization.txt` — 仿真日志
+- `output/sim_trajectory_optimization.png` — 轨迹鸟瞰 + 曲率 + 误差曲线
+- `output/sim_trajectory_optimization_traj.npy` — 优化轨迹点 (x, y)
+- `output/sim_trajectory_optimization_outer.npy` — 赛道边界
 
 ---
 

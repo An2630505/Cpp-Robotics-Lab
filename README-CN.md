@@ -64,6 +64,8 @@ python pipeline/sim_lane_keeping_visualize.py
 Cpp-Robotics-Lab/
 ├── pipeline/                  # Python 仿真场景
 │   ├── sim_lane_keeping.py           #   车道保持仿真
+│   ├── sim_lane_keeping_real.py      #   真实赛道闭环仿真
+│   ├── sim_trajectory_optimization.py #  轨迹优化 (HA* + B-Spline + MPC)
 │   ├── sim_path_planning.py          #   路径规划验证
 │   ├── sim_navigation.py             #   端到端导航
 │   └── ..._visualize.py / ..._animate.py
@@ -78,6 +80,8 @@ Cpp-Robotics-Lab/
 │   ├── motion/                       #   运动规划模块
 │   │   ├── astar/            {astar.h, astar.cc, astar_test.cc}
 │   │   ├── hybrid_astar/     {hybrid_astar.h, hybrid_astar.cc}
+│   │   ├── safe_corridor/    {safe_corridor.h, safe_corridor.cc}
+│   │   ├── bspline/          {bspline.h, bspline.cc}
 │   │   ├── mpc_planner/      {mpc_planner.h, mpc_planner.cc}
 │   │   ├── map_parser/       {map_parser.h, map_parser.cc}
 │   │   ├── bicycle_model/    {bicycle_model.h, bicycle_model.cc, ...}
@@ -101,6 +105,8 @@ Cpp-Robotics-Lab/
 |------|------|:--:|
 | A* | 8 方向离散路径规划 | ✅ |
 | Hybrid A* | 运动学约束连续路径规划 | ✅ |
+| Safe Corridor | 安全走廊构建 | ✅ |
+| B-Spline | B样条拟合与平滑 | ✅ |
 | Pure Pursuit | 纯追踪轨迹规划 | ✅ |
 | Bicycle Model | 自行车动力学模型 | ✅ |
 | Path | 多段组合路径（直道/圆弧/S弯） | ✅ |

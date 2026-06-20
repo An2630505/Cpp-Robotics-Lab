@@ -27,6 +27,7 @@ Cpp-Robotics-Lab is a learning and experimentation platform for autonomous drivi
 - 🛣️ **Centerline Extraction** — Skeleton-based topology graph from track boundaries, handling junctions, roundabouts, and U-shaped loops
 - 🔄 **Circuit Assembly** — Auto-wiring centerline edges into a continuous loop, supporting 3-way forks (roundabout entry), 4+ way crossroads, and bidirectional traversal
 - 🎯 **MPC Lane Keeping** — Model Predictive Control + Bicycle Model + Kalman Filter on real centerline
+- 🚀 **Trajectory Optimization** — Hybrid A* gate-to-gate planning + SafeCorridor + B-Spline smoothing + MPC tracking
 - 🎬 **Animation** — Frame-by-frame playback with zoomed-in view + track overview inset + live error charts
 - 🧩 **Modular Design** — Each module (`map_parser`, `centerline`) is independently importable and testable
 
@@ -37,10 +38,16 @@ Python pipeline (scene scripts / visualization / orchestration)
     ├── Python-native algorithms (map parser, centerline, circuit assembly)
     └── C++ pnc library (pybind11 bindings for core control algorithms)
 
-Real-Track Pipeline:
+Real-Track Pipeline (lane keeping):
   path2.png → map_parser → bounds JSON → centerline → graph JSON
       → assemble_go_straight_circuit → Trajectory → MPC + BicycleModel + KF
       → simulation log → animate / visualize
+
+Trajectory Optimization Pipeline:
+  path2.png → bounds → centerline → circuit → occupancy grid
+      → Gate generation → Hybrid A* gate-to-gate planning
+      → SafeCorridor → B-Spline fitting → equal-arc resample
+      → MPC simulation
 ```
 
 ---
@@ -66,14 +73,18 @@ python pipeline/sim_lane_keeping_real_animate.py --save output/animation.gif --s
 # 1. Build C++ library
 ./build_pnc.sh
 
-# 2. Run basic MPC simulation
+# 2. Trajectory optimization (HA* + B-Spline + MPC) — full pipeline on real track
+python pipeline/sim_trajectory_optimization.py
+python pipeline/sim_trajectory_optimization_animate.py
+
+# 3. Run basic MPC simulation
 python pipeline/sim_mpc_basic.py
 
-# 3. Lane keeping on synthetic path (straight + arc + S-curve)
+# 4. Lane keeping on synthetic path (straight + arc + S-curve)
 python pipeline/sim_lane_keeping.py
 python pipeline/sim_lane_keeping_animate.py
 
-# 4. Path planning + navigation
+# 5. Path planning + navigation
 python pipeline/sim_path_planning.py
 python pipeline/sim_navigation.py
 ```
@@ -98,6 +109,8 @@ Cpp-Robotics-Lab/
 │   │   └── cli.py                     #     CLI entry: bounds JSON → graph JSON
 │   ├── sim_lane_keeping_real.py       #   ★ Real-track MPC lane keeping
 │   ├── sim_lane_keeping_real_animate.py  # ★ Real-track animation
+│   ├── sim_trajectory_optimization.py    # ★ Trajectory optimization (HA* + B-Spline + MPC)
+│   ├── sim_trajectory_optimization_animate.py  # ★ Trajectory optimization animation
 │   ├── sim_lane_keeping.py            #   Synthetic-path MPC lane keeping (uses C++ pnc)
 │   ├── sim_lane_keeping_animate.py    #   Synthetic-path animation
 │   ├── sim_lane_keeping_visualize.py  #   Static visualization
@@ -117,7 +130,9 @@ Cpp-Robotics-Lab/
 │   │   └── lqr/                       #   LQR controller
 │   ├── motion/
 │   │   ├── astar/                     #   A* path planning
-│   │   ├── hybrid_astar/              #   Hybrid A*
+│   │   ├── hybrid_astar/              #   Hybrid A* (with Gate planning)
+│   │   ├── safe_corridor/             #   Safe corridor construction
+│   │   ├── bspline/                   #   B-Spline fitting & resampling
 │   │   ├── mpc_planner/               #   Pure Pursuit trajectory planner
 │   │   ├── map_parser/                #   PGM map parser
 │   │   ├── bicycle_model/             #   Vehicle dynamics model
@@ -220,6 +235,48 @@ Trajectory → reference (x, y, psi, kappa) at each step
 
 ---
 
+## Trajectory Optimization — Hybrid A* + B-Spline + MPC
+
+Full PNC pipeline on real track. Gate-guided Hybrid A* planning followed by B-Spline smoothing and MPC tracking.
+
+```bash
+./build_pnc.sh
+python pipeline/sim_trajectory_optimization.py            # run simulation
+python pipeline/sim_trajectory_optimization_animate.py    # play animation
+```
+
+**Pipeline (7 steps):**
+
+```
+path2.png → parse_map → extract_centerline_graph → assemble_go_straight_circuit
+    → build_occupancy_grid → generate_gates → plan_through_gates (Hybrid A* gate-to-gate)
+    → SafeCorridor.build() → BSpline.fit() → BSpline.resample()
+    → MPC simulation (BicycleModel + KF + feedforward)
+```
+
+| Step | Module | Detail |
+|------|--------|--------|
+| 1 | map_parser | Track boundary extraction + starting line detection |
+| 2 | centerline | Skeleton-based topology graph |
+| 3 | circuit assembly | Auto-wired closed loop from centerline graph |
+| 4 | occupancy grid | Scanline fill + dilation (0.2m cell, 0.5m margin) |
+| 5 | Hybrid A* Gate planning | 15m-spaced gates, kinematically-constrained segment-by-segment |
+| 6 | SafeCorridor + B-Spline | Corridor-constrained cubic B-spline fitting, 0.5m resample |
+| 7 | MPC simulation | Error dynamics + Kalman Filter + curvature feedforward, 10 m/s |
+
+**B-Spline design:**
+
+| Aspect | Detail |
+|--------|--------|
+| Type | Clamped (open) cubic B-spline — trajectory starts/ends at gates |
+| Basis | Cox-de Boor recurrence with correct clamped right-endpoint interpolation |
+| Corridor constraint | 2 soft-projection iterations: detect violation → project → refit |
+| Endpoint smoothness | Path extension + clip-back strategy to avoid clamped endpoint artifacts |
+
+**Key parameters:** cell=0.2m, safety_margin=0.5m, gate_spacing=15m, HA* arc_step=0.6m, BSpline n_ctrl=50 degree=3, resample_spacing=0.5m, MPC N=40 DT=0.1s Vx=10m/s
+
+---
+
 ## Algorithms
 
 ### Motion
@@ -230,7 +287,9 @@ Trajectory → reference (x, y, psi, kappa) at each step
 | Centerline (Python) | Skeleton-based topology graph | `pipeline/centerline/` |
 | Circuit Assembly (Python) | Graph-to-loop auto-wiring | `pipeline/sim_lane_keeping_real.py` |
 | A* | 8-direction discrete path planning | `pnc/motion/astar/` |
-| Hybrid A* | Kinematically-constrained continuous planning | `pnc/motion/hybrid_astar/` |
+| Hybrid A* | Kinematically-constrained continuous planning (with Gate planning) | `pnc/motion/hybrid_astar/` |
+| Safe Corridor | Convex constraint tube along reference path | `pnc/motion/safe_corridor/` |
+| B-Spline | Cubic B-Spline fitting with corridor constraints | `pnc/motion/bspline/` |
 | Pure Pursuit | Trajectory tracking with bicycle model | `pnc/motion/mpc_planner/` |
 | Bicycle Model | Vehicle lateral dynamics | `pnc/motion/bicycle_model/` |
 | Path | Multi-segment (straight/arc/slalom) path | `pnc/motion/path/` |
@@ -275,6 +334,7 @@ For Python-only modules, add to `pipeline/<module>/` with `__init__.py` and foll
 
 | Version | Description |
 |---------|-------------|
+| **v1.2** | Trajectory optimization: Hybrid A* Gate planning, SafeCorridor, B-Spline fitting (clamped open curve), full pipeline with MPC tracking |
 | **v1.1** | Real-track pipeline: map parser, centerline extraction, circuit assembly, MPC lane keeping on real track with roundabout support, bidirectional traversal |
 | **v1.0** | Framework refactor: Python pipeline + C++ pnc library, 10 algorithms, pybind11 integration |
 
