@@ -13,10 +13,11 @@ void BSpline::setParams(const BSplineParams& p) { params_ = p; }
 double BSpline::basis(int i, int k, double t,
                        const std::vector<double>& knots) const {
     if (k == 0) {
-        // 右端点: 最后一跨包含 t == knots[i+1]
+        // 标准区间: [knots[i], knots[i+1]), 右开
         if (t >= knots[i] && t < knots[i + 1]) return 1.0;
-        if (t == knots.back() && i == (int)knots.size() - 2
-            && t == knots[i + 1]) return 1.0;
+        // 右端点: 落在最后一个非退化 knot 跨的右边界上
+        if (t == knots.back() && t == knots[i + 1]
+            && knots[i] < knots[i + 1]) return 1.0;
         return 0.0;
     }
     double left = 0.0, right = 0.0;
@@ -101,7 +102,7 @@ std::vector<Pose> BSpline::fit(
 
     Eigen::MatrixX2d samples(N, 2);
     for (int i = 0; i < N; i++) {
-        double s = total_len * i / N;
+        double s = total_len * i / std::max(1, N - 1);
         // 二分查找弧长所在段
         int lo = 0, hi = n_orig - 1;
         while (lo + 1 < hi) {
@@ -243,9 +244,18 @@ std::vector<Pose> BSpline::fit(
             Eigen::MatrixX2d new_samples(n_s, 2);
             Eigen::MatrixXd new_B(n_s, n_ctrl);
             for (int i = 0; i < n_s; i++) {
-                int src = i * (n_eval - 1) / std::max(1, n_s - 1);
-                new_samples(i, 0) = projected[src](0);
-                new_samples(i, 1) = projected[src](1);
+                // 首尾样本用 ref_path 端点, 确保开放曲线端点不漂移
+                if (!closed && i == 0) {
+                    new_samples(i, 0) = ref_path[0].x;
+                    new_samples(i, 1) = ref_path[0].y;
+                } else if (!closed && i == n_s - 1) {
+                    new_samples(i, 0) = ref_path[n_orig - 1].x;
+                    new_samples(i, 1) = ref_path[n_orig - 1].y;
+                } else {
+                    int src = i * (n_eval - 1) / std::max(1, n_s - 1);
+                    new_samples(i, 0) = projected[src](0);
+                    new_samples(i, 1) = projected[src](1);
+                }
                 double param = t_min + (t_max - t_min) * i / std::max(1, n_s - 1);
                 for (int j = 0; j < n_ctrl; j++)
                     new_B(i, j) = basis(j, degree, param, knots);

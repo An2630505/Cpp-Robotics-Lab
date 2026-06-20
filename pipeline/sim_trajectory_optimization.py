@@ -318,9 +318,37 @@ def smooth_path(raw_path, outer, holes):
 
     Returns: list of (x, y, theta) 平滑等弧长路径
     """
+    # 首尾延伸: 沿切线各延伸 5m, 让 B 样条端点越过门再截断
+    extend_dist = 5.0
+    extended = list(raw_path)
+    if len(extended) >= 2:
+        # 起始端反向延伸
+        dx0 = extended[0][0] - extended[1][0]
+        dy0 = extended[0][1] - extended[1][1]
+        n0 = math.hypot(dx0, dy0)
+        if n0 > 1e-9:
+            dx0 /= n0; dy0 /= n0
+        for d in [1.0, 2.0, 3.0, 4.0, 5.0]:
+            extended.insert(0, (extended[0][0] + dx0 * d,
+                                extended[0][1] + dy0 * d,
+                                extended[0][2]))
+        # 末端正向延伸
+        dx1 = extended[-1][0] - extended[-2][0]
+        dy1 = extended[-1][1] - extended[-2][1]
+        n1 = math.hypot(dx1, dy1)
+        if n1 > 1e-9:
+            dx1 /= n1; dy1 /= n1
+        for d in [1.0, 2.0, 3.0, 4.0, 5.0]:
+            extended.append((extended[-1][0] + dx1 * d,
+                             extended[-1][1] + dy1 * d,
+                             extended[-1][2]))
+    # 记录原始起止点用于截断
+    anchor_start = (raw_path[0][0], raw_path[0][1])
+    anchor_end   = (raw_path[-1][0], raw_path[-1][1])
+
     # 转换为 C++ Pose 列表
     ref_path = []
-    for x, y, th in raw_path:
+    for x, y, th in extended:
         pose = pnc.Pose()
         pose.x = x; pose.y = y; pose.theta = th
         ref_path.append(pose)
@@ -351,7 +379,7 @@ def smooth_path(raw_path, outer, holes):
     params = pnc.BSplineParams()
     params.degree = BSPLINE_DEGREE
     params.num_control_points = BSPLINE_NUM_CTRL
-    params.closed = True
+    params.closed = False
     params.resample_spacing = BSPLINE_RESAMPLE
     bs.set_params(params)
 
@@ -364,6 +392,21 @@ def smooth_path(raw_path, outer, holes):
 
     # 转回 tuple 列表
     result = [(p.x, p.y, p.theta) for p in resampled]
+
+    # 截断到原始起止门: 找离 anchor 最近的点作为真实起止
+    best_start = 0
+    best_end   = len(result) - 1
+    best_sd = 1e9
+    best_ed = 1e9
+    for i, (x, y, _) in enumerate(result):
+        ds = (x - anchor_start[0])**2 + (y - anchor_start[1])**2
+        de = (x - anchor_end[0])**2   + (y - anchor_end[1])**2
+        if ds < best_sd:
+            best_sd = ds; best_start = i
+        if de < best_ed:
+            best_ed = de; best_end = i
+    result = result[best_start:best_end + 1]
+    print(f"  截断后: {len(result)} 点 (from {best_start} to {best_end})")
     return result
 
 
@@ -511,7 +554,11 @@ def run():
     start_pose = pnc.Pose()
     start_pose.x = (gates[0][0].x + gates[0][1].x) * 0.5
     start_pose.y = (gates[0][0].y + gates[0][1].y) * 0.5
-    start_pose.theta = 0.0
+    # 从 gate 方向计算切线朝向: gate 从 left 指向 right,
+    # 切线垂直于 gate 方向 (左旋 90°)
+    gx = gates[0][0].x - gates[0][1].x
+    gy = gates[0][0].y - gates[0][1].y
+    start_pose.theta = math.atan2(-gx, gy)
 
     raw_path = plan_through_gates(grid, grid_meta, start_pose, gates)
 
