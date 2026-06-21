@@ -44,12 +44,14 @@ MAX_STEER  = math.radians(30.0)
 
 # Hybrid A* 参数
 CELL_SIZE      = 0.2       # 栅格分辨率 (m)
-SAFETY_MARGIN  = 0.5       # 安全边距 (m)
 GATE_SPACING   = 15.0      # Gate 间距 (m)
 HA_ARC_LENGTH  = 0.6       # HA* 单步弧长
-VEHICLE_HW     = 0.5       # 车半宽
-VEHICLE_FWD    = 0.8       # 前方延伸
-VEHICLE_REV    = 0.5       # 后方延伸
+VEHICLE_HW     = 1.0       # 车半宽 → 全宽 2.0m
+VEHICLE_FWD    = 1.5       # 前方延伸 (后轴到车头)
+VEHICLE_REV    = 1.0       # 后方延伸 (后轴到车尾) → 总长 2.5m
+SAFETY_MARGIN  = VEHICLE_HW + 0.2  # = 1.2, 栅格膨胀距离
+COLLISION_MARGIN = VEHICLE_HW + 0.2  # = 1.2, HA* 碰撞盒和走廊统一用
+CORRIDOR_MARGIN  = COLLISION_MARGIN  # = 1.2, 走廊边界到膨胀cell的距离 = 车半宽+0.2
 
 # B-Spline 参数
 BSPLINE_DEGREE       = 3
@@ -234,7 +236,7 @@ def plan_through_gates(grid, grid_meta, start_pose, gates):
     ha.set_arc_length(HA_ARC_LENGTH)
     ha.set_goal_xy_tol(1.0)
     ha.set_goal_th_tol(1.0)
-    ha.set_vehicle_dims(VEHICLE_HW, VEHICLE_FWD, VEHICLE_REV)
+    ha.set_vehicle_dims(COLLISION_MARGIN, VEHICLE_FWD + 0.2, VEHICLE_REV + 0.2)
     ha.set_grid_origin(grid_meta["x_min"], grid_meta["y_min"])
 
     full_path = []
@@ -322,9 +324,9 @@ def smooth_path(raw_path, grid, grid_meta):
 
     # Step 1: 构建安全走廊 (基于栅格逐 cell 扫描)
     sc = pnc.SafeCorridor()
-    sc.set_margin(SAFETY_MARGIN)
+    sc.set_margin(CORRIDOR_MARGIN)
     sc.set_sample_interval(2.0)
-    sc.set_vehicle_half_width(VEHICLE_HW)
+    sc.set_vehicle_half_width(COLLISION_MARGIN)
     corridors = sc.build(
         ref_path, grid,
         grid_meta["x_min"], grid_meta["y_min"],
@@ -646,10 +648,11 @@ def visualize(log, traj, raw_path, smoothed, outer, holes, obs_layer, grid_meta,
         car_x[i] = x_ref[i] - ey[i] * math.sin(psi_ref[i])
         car_y[i] = y_ref[i] + ey[i] * math.cos(psi_ref[i])
 
-    llx = x_ref - LANE_WIDTH/2 * np.sin(psi_ref)
-    lly = y_ref + LANE_WIDTH/2 * np.cos(psi_ref)
-    lrx = x_ref + LANE_WIDTH/2 * np.sin(psi_ref)
-    lry = y_ref - LANE_WIDTH/2 * np.cos(psi_ref)
+    # 碰撞边界线 (参考轨迹 ± 碰撞半宽)
+    clx = x_ref - COLLISION_MARGIN * np.sin(psi_ref)
+    cly = y_ref + COLLISION_MARGIN * np.cos(psi_ref)
+    crx = x_ref + COLLISION_MARGIN * np.sin(psi_ref)
+    cry = y_ref - COLLISION_MARGIN * np.cos(psi_ref)
 
     fig = plt.figure(figsize=(22, 16))
     fig.suptitle("Static Obstacles — HA* + B-Spline + MPC", fontsize=16)
@@ -711,9 +714,9 @@ def visualize(log, traj, raw_path, smoothed, outer, holes, obs_layer, grid_meta,
     sy = [p[1] for p in smoothed]
     ax.plot(sx, sy, "b-", lw=2.0, alpha=0.9, label="B-Spline smoothed")
 
-    # 车道边界
-    ax.plot(llx, lly, "gray", lw=0.5, ls=":", alpha=0.5)
-    ax.plot(lrx, lry, "gray", lw=0.5, ls=":", alpha=0.5)
+    # 碰撞边界
+    ax.plot(clx, cly, "gray", lw=0.5, ls=":", alpha=0.5)
+    ax.plot(crx, cry, "gray", lw=0.5, ls=":", alpha=0.5)
 
     # 车辆轨迹
     skip = max(1, N // 500)

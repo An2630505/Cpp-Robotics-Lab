@@ -25,13 +25,14 @@ if _root not in sys.path:
 
 from pipeline.sim_trajectory_optimization import Trajectory
 
-# Geometry (与 sim_lane_keeping_real.py 一致)
+# Geometry (与碰撞检测一致)
 LF, LR = 1.1, 1.58
 L_WB = LF + LR
-CAR_W = 1.8
+FWD, REV = 1.5, 1.0    # 后轴到车头/车尾 (总长 2.5m)
+HW = 1.0                # 车半宽 (全宽 2.0m)
+COLLISION_HW = HW + 0.2 # 碰撞半宽 = 车半宽 + 安全边距
 WHL_W = 0.42
 WHL_L = 0.85
-LANE_W = 3.5
 ZOOM = 20.0
 
 # ============================================================
@@ -77,24 +78,25 @@ def precompute_car_polys(nf, skip, car_x, car_y, psi_car, steer):
 
         cos_p, sin_p = math.cos(ps), math.sin(ps)
         R = np.array([[cos_p, -sin_p], [sin_p, cos_p]])
-        rx, ry = cx - LR*cos_p, cy - LR*sin_p
-        fx, fy = cx + LF*cos_p, cy + LF*sin_p
+        rx, ry = cx - LR*cos_p, cy - LR*sin_p  # 后轴 (碰撞盒原点)
+        fwx = rx + FWD * 0.7 * cos_p             # 前轮: 距车头 0.45m
+        fwy = ry + FWD * 0.7 * sin_p
+        rwx = rx - REV * 0.5 * cos_p             # 后轮: 距车尾 0.5m
+        rwy = ry - REV * 0.5 * sin_p
 
         parts = []
-        # 车身
-        body = np.array([[LF+.2, CAR_W/2], [LF+.2, -CAR_W/2],
-                         [-LR-.2, -CAR_W/2], [-LR-.2, CAR_W/2]])
-        parts.append((body @ R.T + [cx, cy], "#e63946", "#c1121f", 1.5))
+        # 车身 (以后轴为中心: 前 FWD=1.5, 后 REV=1.0, 宽 HW=1.0)
+        body = np.array([[FWD, HW], [FWD, -HW], [-REV, -HW], [-REV, HW]])
+        parts.append((body @ R.T + [rx, ry], "#e63946", "#c1121f", 1.5))
         # 挡风玻璃
-        ws = np.array([[LF+.2, CAR_W*.38], [LF-.3, CAR_W*.38],
-                       [LF-.3, -CAR_W*.38], [LF+.2, -CAR_W*.38]])
-        parts.append((ws @ R.T + [cx, cy], "#a8dadc", "#457b9d", 0.6))
+        ww = HW * 0.76
+        ws = np.array([[FWD, ww], [FWD-0.2, ww], [FWD-0.2, -ww], [FWD, -ww]])
+        parts.append((ws @ R.T + [rx, ry], "#a8dadc", "#457b9d", 0.6))
         # 后窗
-        rw = np.array([[-LR+.3, CAR_W*.38], [-LR-.1, CAR_W*.38],
-                       [-LR-.1, -CAR_W*.38], [-LR+.3, -CAR_W*.38]])
-        parts.append((rw @ R.T + [cx, cy], "#a8dadc", "#457b9d", 0.6))
+        rw = np.array([[-REV+0.15, ww], [-REV, ww], [-REV, -ww], [-REV+0.15, -ww]])
+        parts.append((rw @ R.T + [rx, ry], "#a8dadc", "#457b9d", 0.6))
         # 车轮
-        for ax, ay, angle in [(rx, ry, ps), (fx, fy, ps + st)]:
+        for ax, ay, angle in [(rwx, rwy, ps), (fwx, fwy, ps + st)]:
             ca, sa = math.cos(angle), math.sin(angle)
             Rw = np.array([[ca, -sa], [sa, ca]])
             wh = np.array([[WHL_L/2, WHL_W/2], [WHL_L/2, -WHL_W/2],
@@ -154,10 +156,11 @@ def run():
     psi_car = psi_ref + e_psi
     psi_car = np.array([(p + math.pi) % (2*math.pi) - math.pi for p in psi_car])
 
-    lane_lx = x_ref - LANE_W/2 * np.sin(psi_ref)
-    lane_ly = y_ref + LANE_W/2 * np.cos(psi_ref)
-    lane_rx = x_ref + LANE_W/2 * np.sin(psi_ref)
-    lane_ry = y_ref - LANE_W/2 * np.cos(psi_ref)
+    # 碰撞边界线 (参考轨迹 ± 碰撞半宽)
+    bl_lx = x_ref - COLLISION_HW * np.sin(psi_ref)
+    bl_ly = y_ref + COLLISION_HW * np.cos(psi_ref)
+    bl_rx = x_ref + COLLISION_HW * np.sin(psi_ref)
+    bl_ry = y_ref - COLLISION_HW * np.cos(psi_ref)
 
     ep_deg = np.degrees(e_psi)
     st_deg = np.degrees(steer)
@@ -168,10 +171,10 @@ def run():
     trail_y_frames = [car_y[:i+1] for i in indices]
     ref_x_frames  = [x_ref[:i+1]  for i in indices]
     ref_y_frames  = [y_ref[:i+1]  for i in indices]
-    llx_frames = [lane_lx[:i+1] for i in indices]
-    lly_frames = [lane_ly[:i+1] for i in indices]
-    rlx_frames = [lane_rx[:i+1] for i in indices]
-    rly_frames = [lane_ry[:i+1] for i in indices]
+    blx_frames = [bl_lx[:i+1] for i in indices]
+    bly_frames = [bl_ly[:i+1] for i in indices]
+    brx_frames = [bl_rx[:i+1] for i in indices]
+    bry_frames = [bl_ry[:i+1] for i in indices]
 
     times = [t_arr[i] for i in indices]
     eys   = [e_y[i]    for i in indices]
@@ -207,8 +210,8 @@ def run():
 
     # Dynamic lines
     dyn_ref,   = ax_map.plot([], [], "b-", lw=1.8, alpha=0.55)
-    dyn_ll,    = ax_map.plot([], [], "gray", lw=0.5, ls=":", alpha=0.45)
-    dyn_rl,    = ax_map.plot([], [], "gray", lw=0.5, ls=":", alpha=0.45)
+    dyn_bl,    = ax_map.plot([], [], "gray", lw=0.5, ls=":", alpha=0.45)
+    dyn_br,    = ax_map.plot([], [], "gray", lw=0.5, ls=":", alpha=0.45)
     dyn_trail, = ax_map.plot([], [], "r-", lw=1.5, alpha=0.55)
 
     # Car patches
@@ -276,8 +279,8 @@ def run():
         fi = frame
 
         dyn_ref.set_data(ref_x_frames[fi], ref_y_frames[fi])
-        dyn_ll.set_data(llx_frames[fi], lly_frames[fi])
-        dyn_rl.set_data(rlx_frames[fi], rly_frames[fi])
+        dyn_bl.set_data(blx_frames[fi], bly_frames[fi])
+        dyn_br.set_data(brx_frames[fi], bry_frames[fi])
         dyn_trail.set_data(trail_x_frames[fi], trail_y_frames[fi])
 
         parts = car_frames[fi]
@@ -312,7 +315,7 @@ def run():
         st_line.set_data(t_arr[:n_data], st_deg[:n_data])
         st_cur.set_data([times[fi]], [strs[fi]])
 
-        return [dyn_ref, dyn_ll, dyn_rl, dyn_trail, info_txt,
+        return [dyn_ref, dyn_bl, dyn_br, dyn_trail, info_txt,
                 ey_line, ey_cur, ep_line, ep_cur, st_line, st_cur,
                 ov_trail, ov_dot] + car_patches
 
