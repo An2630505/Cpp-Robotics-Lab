@@ -238,6 +238,7 @@ def plan_through_gates(grid, grid_meta, start_pose, gates):
     ha.set_goal_xy_tol(1.0)
     ha.set_goal_th_tol(1.0)
     ha.set_vehicle_dims(VEHICLE_HW, VEHICLE_FWD, VEHICLE_REV)
+    ha.set_grid_origin(grid_meta["x_min"], grid_meta["y_min"])
 
     full_path = []
     current = start_pose

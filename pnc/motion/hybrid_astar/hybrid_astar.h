@@ -44,6 +44,9 @@ public:
     void setVehicleDims(double half_width, double forward, double rearward) {
         hw_ = half_width; fwd_ = forward; rev_ = rearward;
     }
+    void setGridOrigin(double x_min, double y_min) {
+        x_min_ = x_min; y_min_ = y_min;
+    }
 
     std::vector<Pose> plan(const Pose& start, const Pose& goal);
     std::vector<Pose> planToGate(const Pose& start,
@@ -57,6 +60,7 @@ private:
     int num_steer_, theta_bins_;
     double xy_bin_, goal_xy_tol_, goal_th_tol_;
     double hw_ = 0.3, fwd_ = 0.3, rev_ = 0.3;
+    double x_min_ = 0.0, y_min_ = 0.0;
 
     static double distToSegment(double px, double py,
                                 double ax, double ay,

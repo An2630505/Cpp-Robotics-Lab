@@ -316,7 +316,7 @@ def run():
                 ey_line, ey_cur, ep_line, ep_cur, st_line, st_cur,
                 ov_trail, ov_dot] + car_patches
 
-    fps = int(1000 / interval) if interval > 0 else 5
+    fps = max(1, int(round(1000 / interval))) if interval > 0 else 5
     ani = FuncAnimation(fig, update, frames=nf, interval=interval, blit=False)
     plt.tight_layout(rect=[0, 0, 1, 0.94])
 

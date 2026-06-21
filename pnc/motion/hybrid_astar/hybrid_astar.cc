@@ -22,14 +22,15 @@ bool HybridAStar::collides(const Pose& p) const {
         mx = std::min(mx, wx); Mx = std::max(Mx, wx);
         my = std::min(my, wy); My = std::max(My, wy);
     }
-    int cmn = std::max(0, (int)(mx / cell_size_));
-    int cmx = std::min(grid_size_ - 1, (int)(Mx / cell_size_) + 1);
-    int rmn = std::max(0, (int)(my / cell_size_));
-    int rmx = std::min(grid_size_ - 1, (int)(My / cell_size_) + 1);
+    int cmn = std::max(0, (int)((mx - x_min_) / cell_size_));
+    int cmx = std::min(grid_size_ - 1, (int)((Mx - x_min_) / cell_size_) + 1);
+    int rmn = std::max(0, (int)((my - y_min_) / cell_size_));
+    int rmx = std::min(grid_size_ - 1, (int)((My - y_min_) / cell_size_) + 1);
     for (int r = rmn; r <= rmx; r++)
         for (int ci = cmn; ci <= cmx; ci++) {
             if (grid_[r][ci] == 0) continue;
-            double cx = ci * cell_size_ + 0.1, cy = r * cell_size_ + 0.1;
+            double cx = x_min_ + ci * cell_size_ + cell_size_ * 0.5;
+            double cy = y_min_ + r * cell_size_ + cell_size_ * 0.5;
             double dx = cx - p.x, dy = cy - p.y;
             double bx = c * dx + s * dy, by = -s * dx + c * dy;
             if (bx >= -rev_ && bx <= fwd_ && by >= -hw_ && by <= hw_) return true;
@@ -81,10 +82,10 @@ std::vector<Pose> HybridAStar::planToGate(const Pose& start,
         std::priority_queue<Cell, std::vector<Cell>, std::greater<Cell>> pq;
 
         // Bresenham 线算法枚举 gate 线段穿过的所有栅格
-        int ga_r = (int)(gate_a.y / cell_size_);
-        int ga_c = (int)(gate_a.x / cell_size_);
-        int gb_r = (int)(gate_b.y / cell_size_);
-        int gb_c = (int)(gate_b.x / cell_size_);
+        int ga_r = (int)((gate_a.y - y_min_) / cell_size_);
+        int ga_c = (int)((gate_a.x - x_min_) / cell_size_);
+        int gb_r = (int)((gate_b.y - y_min_) / cell_size_);
+        int gb_c = (int)((gate_b.x - x_min_) / cell_size_);
 
         int dx = std::abs(gb_c - ga_c), dy = -std::abs(gb_r - ga_r);
         int sx = ga_c < gb_c ? 1 : -1, sy = ga_r < gb_r ? 1 : -1;
@@ -128,7 +129,8 @@ std::vector<Pose> HybridAStar::planToGate(const Pose& start,
     std::unordered_map<int, double> best_g;
     std::vector<HNode> closed;
 
-    int sr = (int)(start.y / cell_size_), sc = (int)(start.x / cell_size_);
+    int sr = (int)((start.y - y_min_) / cell_size_);
+    int sc = (int)((start.x - x_min_) / cell_size_);
     HNode sn = makeNode(start.x, start.y, start.theta);
     sn.g = 0;
     sn.h = h2d[sr][sc] * cell_size_;
@@ -162,12 +164,14 @@ std::vector<Pose> HybridAStar::planToGate(const Pose& start,
         for (double steer : steers) {
             Pose np = step({cur.x, cur.y, cur.theta}, steer, arc_length_);
             double map_w = grid_size_ * cell_size_;
-            if (np.x < 0 || np.x >= map_w || np.y < 0 || np.y >= map_w) continue;
+            if (np.x < x_min_ || np.x >= x_min_ + map_w
+                || np.y < y_min_ || np.y >= y_min_ + map_w) continue;
             if (arcCollides({cur.x, cur.y, cur.theta}, steer, arc_length_)) continue;
 
             double cost = arc_length_ + std::abs(steer) * arc_length_ * 0.3;
             double ng = cur.g + cost;
-            int hr = (int)(np.y / cell_size_), hc = (int)(np.x / cell_size_);
+            int hr = (int)((np.y - y_min_) / cell_size_);
+            int hc = (int)((np.x - x_min_) / cell_size_);
             double hv = h2d[hr][hc];
             if (hv > 1e8) continue;
 
@@ -197,7 +201,8 @@ std::vector<Pose> HybridAStar::plan(const Pose& start, const Pose& goal) {
     {
         using Cell = std::pair<double, std::pair<int, int>>;
         std::priority_queue<Cell, std::vector<Cell>, std::greater<Cell>> pq;
-        int gr = (int)(goal.y / cell_size_), gc = (int)(goal.x / cell_size_);
+        int gr = (int)((goal.y - y_min_) / cell_size_);
+        int gc = (int)((goal.x - x_min_) / cell_size_);
         if (gr >= 0 && gr < grid_size_ && gc >= 0 && gc < grid_size_) {
             h2d[gr][gc] = 0; pq.push({0, {gr, gc}});
         }
@@ -228,7 +233,8 @@ std::vector<Pose> HybridAStar::plan(const Pose& start, const Pose& goal) {
     std::unordered_map<int, double> best_g;
     std::vector<HNode> closed;
 
-    int sr = (int)(start.y / cell_size_), sc = (int)(start.x / cell_size_);
+    int sr = (int)((start.y - y_min_) / cell_size_);
+    int sc = (int)((start.x - x_min_) / cell_size_);
     HNode sn = makeNode(start.x, start.y, start.theta);
     sn.g = 0;
     sn.h = h2d[sr][sc] * cell_size_;
@@ -261,12 +267,14 @@ std::vector<Pose> HybridAStar::plan(const Pose& start, const Pose& goal) {
         for (double steer : steers) {
             Pose np = step({cur.x, cur.y, cur.theta}, steer, arc_length_);
             double map_w = grid_size_ * cell_size_;
-            if (np.x < 0 || np.x >= map_w || np.y < 0 || np.y >= map_w) continue;
+            if (np.x < x_min_ || np.x >= x_min_ + map_w
+                || np.y < y_min_ || np.y >= y_min_ + map_w) continue;
             if (arcCollides({cur.x, cur.y, cur.theta}, steer, arc_length_)) continue;
 
             double cost = arc_length_ + std::abs(steer) * arc_length_ * 0.3;
             double ng = cur.g + cost;
-            int hr = (int)(np.y / cell_size_), hc = (int)(np.x / cell_size_);
+            int hr = (int)((np.y - y_min_) / cell_size_);
+            int hc = (int)((np.x - x_min_) / cell_size_);
             double hv = h2d[hr][hc];
             if (hv > 1e8) continue;
 
