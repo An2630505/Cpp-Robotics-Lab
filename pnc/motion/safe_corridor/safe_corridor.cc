@@ -84,24 +84,55 @@ std::vector<CorridorSection> SafeCorridor::build(
         Vec2d n_left  = { -ty,  tx };
         Vec2d n_right = {  ty, -tx };
 
-        // Step 3: 沿法向逐 cell 扫描
-        auto scan = [&](const Vec2d& dir) -> double {
+        // Step 3: 矩形扩张 — 沿法向逐层扩张矩形, 检查矩形内全部 cell
+        // 矩形: 以采样点为中心, 切向宽度=2*hw_world, 法向深度=step*cell_size (递增)
+        Vec2d tangent = { tx, ty };
+        double hw_world = vehicle_half_width_;  // 车辆半宽 (m)
+
+        auto expandRect = [&](const Vec2d& normal) -> double {
             for (int step = 1; step < max_steps; step++) {
-                double wx = pt.x + dir.x * step * cell_size;
-                double wy = pt.y + dir.y * step * cell_size;
-                auto [r, c] = worldToGrid(wx, wy);
-                if (r < 0 || r >= rows || c < 0 || c >= cols) {
-                    return (step - 1) * cell_size;
+                double depth = step * cell_size;
+                // 计算矩形在 grid 中的包围盒
+                // 矩形 4 个角点
+                double corners[4][2] = {
+                    {pt.x + tangent.x * (-hw_world),
+                     pt.y + tangent.y * (-hw_world)},
+                    {pt.x + tangent.x * (+hw_world),
+                     pt.y + tangent.y * (+hw_world)},
+                    {pt.x + normal.x * depth + tangent.x * (+hw_world),
+                     pt.y + normal.y * depth + tangent.y * (+hw_world)},
+                    {pt.x + normal.x * depth + tangent.x * (-hw_world),
+                     pt.y + normal.y * depth + tangent.y * (-hw_world)}
+                };
+                int min_r = rows, max_r = -1, min_c = cols, max_c = -1;
+                for (int k = 0; k < 4; k++) {
+                    auto [r, c2] = worldToGrid(corners[k][0], corners[k][1]);
+                    if (r < 0) r = 0; if (r >= rows) r = rows - 1;
+                    if (c2 < 0) c2 = 0; if (c2 >= cols) c2 = cols - 1;
+                    min_r = std::min(min_r, r); max_r = std::max(max_r, r);
+                    min_c = std::min(min_c, c2); max_c = std::max(max_c, c2);
                 }
-                if (grid[r][c] == 1) {
-                    return (step - 1) * cell_size;
+                // 遍历包围盒内全部 cell, 点积判断是否在矩形内
+                for (int r = min_r; r <= max_r; r++) {
+                    for (int c = min_c; c <= max_c; c++) {
+                        double wx = x_min + c * cell_size + cell_size * 0.5;
+                        double wy = y_min + r * cell_size + cell_size * 0.5;
+                        double dx = wx - pt.x, dy = wy - pt.y;
+                        double proj_n = dx * normal.x  + dy * normal.y;
+                        double proj_t = dx * tangent.x + dy * tangent.y;
+                        if (proj_n >= 0.0 && proj_n <= depth + 1e-9
+                            && std::abs(proj_t) <= hw_world + 1e-9) {
+                            if (grid[r][c] == 1)
+                                return (step - 1) * cell_size;
+                        }
+                    }
                 }
             }
             return (max_steps - 1) * cell_size;
         };
 
-        double d_left  = scan(n_left);
-        double d_right = scan(n_right);
+        double d_left  = expandRect(n_left);
+        double d_right = expandRect(n_right);
 
         // Step 4: 减安全边距
         d_left  = std::max(0.0, d_left  - margin_);

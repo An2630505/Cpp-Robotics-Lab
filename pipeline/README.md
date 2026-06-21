@@ -173,17 +173,13 @@ loop_pts = loop_pts[::-1]  # 反向跑
 
 ## 轨迹优化 (Trajectory Optimization)
 
-**C++ 依赖，完整 PNC 管线。** 从地图到 MPC 控制，7 步闭环仿真。
+**C++ 依赖，完整 PNC 管线。** 从地图到 MPC 控制，8 步闭环仿真。
 
-### sim_trajectory_optimization — Hybrid A* + B-Spline + MPC
+### sim_trajectory_optimization — 闭环赛道轨迹优化
 
 ```bash
-# 编译 C++ 库后运行
-./build_pnc.sh
+cd build && cmake .. && cmake --build . && cd ..
 python pipeline/sim_trajectory_optimization.py
-
-# 动画回放
-python pipeline/sim_trajectory_optimization_animate.py
 ```
 
 **管线流程：**
@@ -191,48 +187,75 @@ python pipeline/sim_trajectory_optimization_animate.py
 ```
 path2.png → map_parser → centerline → circuit assembly
     → occupancy grid → Gate 生成 → Hybrid A* 分段门规划
-    → SafeCorridor 构建 → B-Spline 拟合平滑 → 等弧长重采样
-    → MPC 轨迹跟踪仿真
+    → SafeCorridor (矩形扩张) → B-Spline 拟合 → MPC 仿真
 ```
 
-| 步骤 | 模块 | 说明 |
-|------|------|------|
-| 1 | map_parser | 赛道边界提取 + 起跑线检测 |
-| 2 | centerline | 中心线拓扑图提取 |
-| 3 | circuit assembly | 闭环回路拼接 |
-| 4 | occupancy grid | 扫描线填充 + 膨胀构建栅格地图 |
-| 5 | Hybrid A* Gate 规划 | 沿中心线 15m 间距生成 Gate，逐段运动学规划 |
-| 6 | SafeCorridor + B-Spline | 安全走廊构建 → clamped B 样条拟合 → 等弧长重采样 |
-| 7 | MPC 仿真 | 误差动力学模型 + 卡尔曼滤波 + 曲率前馈 |
+### sim_static_obstacles — 静态障碍物避让
 
-**核心参数：**
+在赛道上放置静态障碍物（圆/矩形/多边形），验证避障能力。
+
+```bash
+python pipeline/sim_static_obstacles.py
+```
+
+障碍物配置：`config/obstacles.json`
+```json
+{
+  "obstacles": [
+    {"type": "circle",    "center": [60, 48], "radius": 0.5},
+    {"type": "rectangle", "center": [31, 57.5], "width": 1.2, "height": 0.8, "yaw": 0.3},
+    {"type": "rectangle", "center": [45, 30], "width": 0.8, "height": 0.8, "yaw": 0.785}
+  ]
+}
+```
+
+### SafeCorridor — 矩形扩张构建安全走廊
+
+在每个 HA* 轨迹采样点上沿左右法向**扩张矩形**，逐 cell 检查栅格：
+
+```
+         n_left (法向)
+          ↑
+ step 3:  ┌──────────────────┐  depth = 3×cell
+ step 2:  │  ┌──────────────┐│  
+ step 1:  │  │  ┌──────────┐││  
+          │  │  │  车辆    │││  ← 初始矩形 (宽 = 2×vehicle_hw)
+          │  │  └──────────┘││
+          │  └──────────────┘│
+          └──────────────────┘
+          ├── 2×hw ──┤
+          
+ 每层扩张: 计算矩形 4 角点的 grid 包围盒 → 遍历包围盒内每个 cell
+          → 点积判定是否在矩形内 → 任一 occupied → 返回上一层距离
+          → 减 margin → 记录 CorridorSection(center, left, right)
+```
+
+218 个截面连成安全走廊管道，作为 B 样条拟合的**硬约束**。
+
+### 核心参数
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
-| 栅格分辨率 | 0.2 m | 占用栅格 cell size |
-| 安全边距 | 0.5 m | 障碍物膨胀距离 |
-| Gate 间距 | 15 m | 沿中心线等弧长采样 |
-| HA* 单车步长 | 0.6 m | 运动学扩展弧长 |
-| 车辆尺寸 | hw=0.5, fwd=0.8, rev=0.5 m | 碰撞检测 bounding box |
-| B-Spline 阶数 | 3 (cubic) | clamped 开放曲线 |
-| B-Spline 控制点 | 50 | 最小二乘拟合自由度 |
-| 重采样间距 | 0.5 m | 等弧长输出间距 |
-| MPC 预测时域 | N=40 | 闭式无约束 QP |
-| 仿真速度 | 10 m/s | DT=0.1s |
-| 最大转向角 | ±30° | 运动学约束 |
+| CELL_SIZE | 0.2 m | 栅格分辨率 |
+| SAFETY_MARGIN | 0.5 m | 障碍物膨胀 + 走廊边距 |
+| VEHICLE_HW | 0.5 m | 车辆半宽 (矩形扫描宽度) |
+| GATE_SPACING | 15 m | Gate 间距 |
+| SAMPLE_INTERVAL | 2 m | 走廊截面采样间距 |
+| BSPLINE_DEGREE | 3 (cubic) | B 样条阶数 |
+| BSPLINE_NUM_CTRL | 50 / 100 | 轨迹优化 50, 静态障碍物 100 |
+| BSPLINE_RESAMPLE | 0.5 m | 等弧长重采样间距 |
+| N_HORIZON | 40 | MPC 预测步数 |
+| VX | 10 m/s | 恒定巡航速度 |
+| DT | 0.1 s | 仿真步长 |
+| MAX_STEER | ±30° | 最大转向角 |
 
-**B-Spline 实现要点：**
+### 输出
 
-- **Clamped 开放曲线**：轨迹起止于 Gate，不强制闭环
-- **Cox-de Boor 递推基函数**：正确支持 clamped knot vector 右端点插值
-- **走廊软约束投影**：2 次迭代，超出走廊边界 → 投影回边界 → 重新拟合
-- **首尾平滑**：延伸路径 + 截断法，避免 clamped 样条端点切线敏感
-
-**输出：**
 - `output/sim_trajectory_optimization.txt` — 仿真日志
-- `output/sim_trajectory_optimization.png` — 轨迹鸟瞰 + 曲率 + 误差曲线
+- `output/sim_trajectory_optimization.png` — 轨迹鸟瞰 + SafeCorridor + 曲率 + 误差曲线
 - `output/sim_trajectory_optimization_traj.npy` — 优化轨迹点 (x, y)
-- `output/sim_trajectory_optimization_outer.npy` — 赛道边界
+- `output/sim_trajectory_optimization_corridors.npy` — 安全走廊截面 (N,3,2)
+- `output/sim_static_obstacles.txt/png` — 静态障碍物场景输出
 
 ---
 

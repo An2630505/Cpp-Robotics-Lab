@@ -1,204 +1,116 @@
-# 控制算法项目文档
+# Cpp-Robotics-Lab
 
-## 项目概述
+C++ 自动驾驶算法库 + Python 仿真管线。
 
-本项目实现了一个基于 PID/LQR 控制器的目标跟踪系统，使用卡尔曼滤波器进行状态估计。系统能够控制被控对象（Plant）跟踪一个做圆周运动的目标（Object）。
-
-## 系统架构
+## 架构
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                          控制系统                               │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│   ┌──────────┐     ┌──────────┐     ┌──────────┐     ┌─────────┐ │
-│   │ Target   │     │   KF     │     │Controller│     │  Plant  │ │
-│   │(Object)  │────▶│(Object)  │     │ (PID/LQR)│────▶│(被控对象)│ │
-│   │ 圆周运动  │     │ 状态估计  │     │ 误差控制  │     │  小球   │ │
-│   └──────────┘     └──────────┘     └──────────┘     └─────────┘ │
-│        │                                    ▲            │      │
-│        │                                    │            │      │
-│        │            ┌──────────┐            │            │      │
-│        └───────────▶│   KF     │────────────┘            │      │
-│                     │ (Plant)  │                          │      │
-│                     │ 状态估计  │◀─────────────────────────┘      │
-│                     └──────────┘                                │
-│                                                                 │
+│                     Python Pipeline (pipeline/)                 │
+│  map_parser → centerline → HA* → SafeCorridor → BSpline → MPC  │
+│                         │               │            │         │
+│                    调用 C++ 算法    调用 C++ 算法   调用 C++    │
+└─────────────────────────┼───────────────┼────────────┼─────────┘
+                          │               │            │
+┌─────────────────────────┼───────────────┼────────────┼─────────┐
+│                     C++ 算法库 (pnc/)                           │
+│  astar  hybrid_astar  safe_corridor  bspline                   │
+│  path   bicycle_model  mpc_planner    map_parser               │
+│  ───────────────────────────────────────────                    │
+│  control:  mpc  kf  lqr  pid                                   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## 核心模块
+## 仿真管线
 
-### 1. Plant（被控对象）
+| 步骤 | 模块 | 说明 |
+|------|------|------|
+| 1 | map_parser | 解析 path2.png → 提取外边界多边形 + 孔洞 |
+| 2 | centerline | 边界骨架化 → 提取拓扑图 → 组装闭环中心线 |
+| 3 | static_obstacles | 加载障碍物配置 (圆/矩形/多边形) → 生成障碍物多边形 |
+| 4 | build_occupancy_grid | 扫描线填充 → 障碍物标记 → 膨胀 → 占用栅格 (0=自由, 1=障碍物) |
+| 5 | Hybrid A\* | 逐 Gate 规划粗略轨迹, 栅格碰撞检测保证无碰 |
+| 6 | SafeCorridor | 在 HA* 采样点上扩张矩形, 逐 cell 检查栅格 → 安全走廊截面 |
+| 7 | BSpline | 以安全走廊为约束, 拟合平滑轨迹 → 等弧长重采样 |
+| 8 | MPC + KF | 模型预测控制 + 卡尔曼滤波 + 前馈 → 仿真跟踪 |
 
-被控对象为一个二阶系统，状态向量包含位置、速度、加速度信息：
+## SafeCorridor — 安全走廊构建
 
-```
-x = [x, dx, ddx, y, dy, ddy]ᵀ
-  = [x位置, x速度, x加速度, y位置, y速度, y加速度]ᵀ
-```
-
-**系统矩阵（A, B, C, D）**：
-
-状态转移方程（离散时间，步长 dt）：
-
-```
-x(k+1) = A·x(k) + B·u(k) + w(k)    // 状态更新
-y(k)   = C·x(k) + D·u(k) + h(k)    // 观测输出
-```
-
-其中 `w(k)` 为过程噪声（摩擦扰动），`h(k)` 为观测噪声。
-
-**噪声建模**：
-- **过程噪声**：基于库仑摩擦模型 + 高斯随机噪声
-- **观测噪声**：零均值高斯噪声
-
-### 2. Object（目标对象）
-
-目标对象沿圆周轨迹运动，状态向量：
+在每个 HA* 轨迹采样点上向左右法向**扩张矩形**, 检查矩形内全部 cell：
 
 ```
-x = [x, y, dx, dy]ᵀ
-  = [x位置, y位置, x速度, y速度]ᵀ
+         n_left
+          ↑
+ step 3:  ┌──────────────────┐  depth = 3×cell
+ step 2:  │  ┌──────────────┐│  depth = 2×cell
+ step 1:  │  │  ┌──────────┐││  depth = 1×cell
+          │  │  │  车辆    │││  ← 初始矩形 (宽 = 2×vehicle_hw)
+          │  │  └──────────┘││
+          │  └──────────────┘│
+          └──────────────────┘
+          ├── 2×hw ──┤
+          
+   逐层检查: 计算矩形包围盒 → 遍历每个 cell → 点积判定是否在矩形内
+   任一 occupied → 返回上一层距离 → 减 margin → 记录截面
 ```
 
-运动特性：速度矢量随时间旋转，角频率 ω = 0.1 rad/s
+每个截面 `CorridorSection` 记录 `center`(采样点)、`left`(左边界)、`right`(右边界)。218 个截面连成安全走廊管道, 作为 B 样条拟合的硬约束。
 
-### 3. PID 控制器
+## C++ 算法模块 (pnc/)
 
-支持两种 PID 控制算法：
+| 模块 | 文件 | 功能 |
+|------|------|------|
+| A\* | `motion/astar/` | A\* 栅格路径规划 |
+| Hybrid A\* | `motion/hybrid_astar/` | 车体运动学约束的 A\* |
+| SafeCorridor | `motion/safe_corridor/` | 矩形扩张构建安全走廊 |
+| BSpline | `motion/bspline/` | B 样条拟合与重采样 |
+| BicycleModel | `motion/bicycle_model/` | 自行车动力学模型 |
+| MapParser | `motion/map_parser/` | 地图解析与栅格构建 |
+| MPC | `control/mpc/` | 模型预测控制 |
+| KF | `control/kf/` | 卡尔曼滤波器 |
+| LQR | `control/lqr/` | 线性二次调节器 |
+| PID | `control/pid/` | PID 控制器 |
 
-**位置式 PID**：
-```
-u(k) = Kp·e(k) + Ki·Σe(k) + Kd·(e(k) - e(k-1))
-```
+## Python Pipeline (pipeline/)
 
-**增量式 PID**：
-```
-Δu = Kp·(e(k) - e(k-1)) + Ki·e(k) + Kd·(e(k) - 2·e(k-1) + e(k-2))
-u(k) = u(k-1) + Δu
-```
-
-默认参数（x, y 两个通道）：
-- Kp = [3.1, 1.2]
-- Ki = [0.0, 0.0]
-- Kd = [5.0, 5.0]
-
-### 4. LQR 控制器
-
-线性二次调节器，通过求解 Riccati 方程得到最优反馈增益 K：
-
-```
-u(k) = K · (x_ref - x_obs)
-```
-
-权重矩阵：
-- Q：状态权重矩阵
-- R：输入权重矩阵
-- S：终端权重矩阵
-
-### 5. Kalman Filter（卡尔曼滤波器）
-
-卡尔曼滤波器用于融合传感器测量数据，得到最优状态估计。
-
-**预测步骤**：
-```
-x̂(k|k-1) = A·x̂(k-1|k-1) + B·u(k)
-P(k|k-1) = A·P(k-1|k-1)·Aᵀ + Q
-```
-
-**修正步骤**：
-```
-K(k) = P(k|k-1)·Cᵀ·(C·P(k|k-1)·Cᵀ + R)⁻¹
-x̂(k|k) = x̂(k|k-1) + K(k)·(z(k) - C·x̂(k|k-1))
-P(k|k) = (I - K(k)·C)·P(k|k-1)
-```
-
-## 文件结构
-
-```
-controlAlgorithm/
-├── main.cpp           # 主程序，包含系统初始化和主循环
-├── main.h             # 全局头文件，引用 Eigen 库
-├── Makefile           # 编译规则
-├── config.json        # 配置文件
-│
-├── include/           # 头文件目录
-│   ├── PID.h          # PID 控制器类
-│   ├── LQR.h          # LQR 控制器类
-│   ├── KF.h           # 卡尔曼滤波器类
-│   ├── Plant.h        # 被控对象类
-│   └── Object.h       # 目标对象类
-│
-├── src/               # 源文件目录
-│   ├── PID.cpp
-│   ├── LQR.cpp
-│   ├── KF.cpp
-│   ├── Plant.cpp
-│   └── Object.cpp
-│
-├── output/            # 输出目录
-│   └── output.txt     # 仿真数据输出
-│
-├── docs/              # 文档目录
-│   ├── README.md      # 本文档
-│   ├── GIT_COMMIT_GUIDE.md
-│   ├── plan.md
-│   └── plan-kdl.md
-│
-└── plot_results.py   # 数据可视化脚本
-```
+| 脚本 | 功能 |
+|------|------|
+| `sim_trajectory_optimization.py` | 轨迹优化: HA\* + SafeCorridor + BSpline + MPC |
+| `sim_static_obstacles.py` | 静态障碍物场景: 同上 + 障碍物避让 |
+| `sim_lane_keeping_real.py` | 车道保持: 闭环回路 + MPC 循迹 |
+| `sim_navigation.py` | A\*/HA\* 路径规划导航 |
+| `sim_mpc_basic.py` | 基础 MPC 仿真 |
+| `map_parser/` | 地图解析 (PNG → 多边形边界) |
+| `centerline/` | 中心线提取 (骨架化 → 拓扑图 → 回路) |
+| `static_obstacles/` | 障碍物定义与加载 |
 
 ## 编译与运行
 
-### 编译
 ```bash
-make
+# 编译 C++ 模块
+cd build && cmake .. && cmake --build .
+
+# 运行仿真 (需 conda 环境 CRL, Python 3.11)
+conda activate CRL
+python pipeline/sim_trajectory_optimization.py
+python pipeline/sim_static_obstacles.py
+
+# 运行 C++ 单元测试
+./build/pnc/test_safe_corridor
+./build/pnc/test_bspline
+./build/pnc/test_hybrid_astar
 ```
 
-### 运行
-```bash
-./output/main
-```
+## 关键参数
 
-### 可视化
-```bash
-python3 plot_results.py
-```
-
-## 配置说明
-
-### 控制器选择
-
-在 `main.cpp` 中选择使用 PID 或 LQR：
-
-```cpp
-// 使用 PID 控制器
-u = pid.positionPID(target_pos, current_pos);
-
-// 使用 LQR 控制器
-u = lqr.run(object.kf.y_post, plant.kf.x_post);
-```
-
-### 关键参数
-
-| 参数 | 说明 | 默认值 |
-|------|------|--------|
-| dt | 仿真步长 | 0.1s |
-| ω | 目标角频率 | 0.1 rad/s |
-| μ | 摩擦系数 | 0.1 |
-| noise_std | 噪声标准差 | 0.01 |
-
-## 仿真输出
-
-运行后在 `output/output.txt` 中保存仿真数据，格式：
-
-```
-Step, plant.x, plant.y, plant.dx, plant.dy, object.x, object.y, object.dx, object.dy
-```
-
-## 下一步计划
-
-1. 实现 MPC（模型预测控制）控制器
-2. 优化 LQR 在噪声环境下的性能
-3. 添加更多目标轨迹类型
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| CELL_SIZE | 0.2m | 栅格分辨率 |
+| SAFETY_MARGIN | 0.5m | 安全边距 |
+| VEHICLE_HW | 0.5m | 车辆半宽 (矩形扫描宽度) |
+| GATE_SPACING | 15m | Gate 间距 |
+| SAMPLE_INTERVAL | 2m | 走廊采样间距 |
+| BSPLINE_DEGREE | 3 | B 样条阶数 |
+| VX | 10 m/s | 恒定巡航速度 |
+| DT | 0.1s | 仿真步长 |
+| N_HORIZON | 40 | MPC 预测步数 |

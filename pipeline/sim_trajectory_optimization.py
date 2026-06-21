@@ -331,6 +331,7 @@ def smooth_path(raw_path, grid, grid_meta):
     sc = pnc.SafeCorridor()
     sc.set_margin(SAFETY_MARGIN)
     sc.set_sample_interval(2.0)
+    sc.set_vehicle_half_width(VEHICLE_HW)
     corridors = sc.build(
         ref_path, grid,
         grid_meta["x_min"], grid_meta["y_min"],

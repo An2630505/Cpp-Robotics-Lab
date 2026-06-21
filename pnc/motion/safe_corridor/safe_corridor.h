@@ -4,15 +4,16 @@
 #include <vector>
 #include "../../common/types.h"
 
-/// 安全走廊构建器 — 沿参考路径逐 cell 扫描占用栅格, 生成凸约束管道
+/// 安全走廊构建器 — 在每个采样点扩张矩形, 检查矩形内全部 cell
 class SafeCorridor {
 public:
     SafeCorridor();
 
-    void setMargin(double m)          { margin_ = m; }
-    void setSampleInterval(double ds) { sample_interval_ = ds; }
+    void setMargin(double m)              { margin_ = m; }
+    void setSampleInterval(double ds)     { sample_interval_ = ds; }
+    void setVehicleHalfWidth(double hw)   { vehicle_half_width_ = hw; }
 
-    /// 从参考路径和占用栅格构建安全走廊 (沿法向逐 cell 扫描)
+    /// 从参考路径和占用栅格构建安全走廊 (矩形扩张, 2D 扫描)
     /// @param ref_path  参考路径 (连续位姿序列)
     /// @param grid      占用栅格 (0=自由, 1=障碍物)
     /// @param x_min,y_min  栅格原点世界坐标
@@ -28,6 +29,7 @@ public:
 private:
     double margin_ = 0.5;
     double sample_interval_ = 2.0;
+    double vehicle_half_width_ = 0.5;  // 车辆半宽 (m), 控制矩形扫描宽度
 };
 
 #endif  // PNC_MOTION_SAFE_CORRIDOR_H_
