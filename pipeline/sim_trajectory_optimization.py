@@ -14,6 +14,8 @@ import numpy as np
 import matplotlib
 matplotlib.use("TkAgg")
 import matplotlib.pyplot as plt
+from matplotlib.path import Path as MplPath
+from matplotlib.patches import PathPatch
 
 _self_dir = os.path.dirname(os.path.abspath(__file__))
 _project_root = os.path.dirname(_self_dir)
@@ -308,70 +310,31 @@ def plan_through_gates(grid, grid_meta, start_pose, gates):
 #  Safe Corridor + B-Spline 平滑
 # =====================================================================
 
-def smooth_path(raw_path, outer, holes):
+def smooth_path(raw_path, grid, grid_meta):
     """
     对 Hybrid A* 原始路径构建安全走廊 + B 样条拟合。
 
     raw_path: list of (x, y, theta)
-    outer: (N,2) numpy
-    holes: list of (M,2) numpy
+    grid: list[list[int]] — 占用栅格 (0=自由, 1=障碍物)
+    grid_meta: dict with x_min, y_min, cell_size, cols, rows
 
-    Returns: list of (x, y, theta) 平滑等弧长路径
+    Returns: (smoothed_path, corridors)
     """
-    # 首尾延伸: 沿切线各延伸 5m, 让 B 样条端点越过门再截断
-    extend_dist = 5.0
-    extended = list(raw_path)
-    if len(extended) >= 2:
-        # 起始端反向延伸
-        dx0 = extended[0][0] - extended[1][0]
-        dy0 = extended[0][1] - extended[1][1]
-        n0 = math.hypot(dx0, dy0)
-        if n0 > 1e-9:
-            dx0 /= n0; dy0 /= n0
-        for d in [1.0, 2.0, 3.0, 4.0, 5.0]:
-            extended.insert(0, (extended[0][0] + dx0 * d,
-                                extended[0][1] + dy0 * d,
-                                extended[0][2]))
-        # 末端正向延伸
-        dx1 = extended[-1][0] - extended[-2][0]
-        dy1 = extended[-1][1] - extended[-2][1]
-        n1 = math.hypot(dx1, dy1)
-        if n1 > 1e-9:
-            dx1 /= n1; dy1 /= n1
-        for d in [1.0, 2.0, 3.0, 4.0, 5.0]:
-            extended.append((extended[-1][0] + dx1 * d,
-                             extended[-1][1] + dy1 * d,
-                             extended[-1][2]))
-    # 记录原始起止点用于截断
-    anchor_start = (raw_path[0][0], raw_path[0][1])
-    anchor_end   = (raw_path[-1][0], raw_path[-1][1])
-
     # 转换为 C++ Pose 列表
     ref_path = []
-    for x, y, th in extended:
+    for x, y, th in raw_path:
         pose = pnc.Pose()
         pose.x = x; pose.y = y; pose.theta = th
         ref_path.append(pose)
 
-    # 转换边界为 Vec2d 列表
-    outer_vec = []
-    for x, y in outer:
-        v = pnc.Vec2d(); v.x = x; v.y = y
-        outer_vec.append(v)
-
-    holes_vec = []
-    for h in holes:
-        hv = []
-        for x, y in h:
-            v = pnc.Vec2d(); v.x = x; v.y = y
-            hv.append(v)
-        holes_vec.append(hv)
-
-    # Step 1: 构建安全走廊
+    # Step 1: 构建安全走廊 (基于栅格逐 cell 扫描)
     sc = pnc.SafeCorridor()
     sc.set_margin(SAFETY_MARGIN)
     sc.set_sample_interval(2.0)
-    corridors = sc.build(ref_path, outer_vec, holes_vec)
+    corridors = sc.build(
+        ref_path, grid,
+        grid_meta["x_min"], grid_meta["y_min"],
+        grid_meta["cell_size"], grid_meta["cols"], grid_meta["rows"])
     print(f"  安全走廊: {len(corridors)} sections")
 
     # Step 2: B 样条拟合
@@ -390,24 +353,9 @@ def smooth_path(raw_path, outer, holes):
     resampled = bs.resample(fitted)
     print(f"  重采样: {len(resampled)} 点")
 
-    # 转回 tuple 列表
     result = [(p.x, p.y, p.theta) for p in resampled]
-
-    # 截断到原始起止门: 找离 anchor 最近的点作为真实起止
-    best_start = 0
-    best_end   = len(result) - 1
-    best_sd = 1e9
-    best_ed = 1e9
-    for i, (x, y, _) in enumerate(result):
-        ds = (x - anchor_start[0])**2 + (y - anchor_start[1])**2
-        de = (x - anchor_end[0])**2   + (y - anchor_end[1])**2
-        if ds < best_sd:
-            best_sd = ds; best_start = i
-        if de < best_ed:
-            best_ed = de; best_end = i
-    result = result[best_start:best_end + 1]
-    print(f"  截断后: {len(result)} 点 (from {best_start} to {best_end})")
-    return result
+    print(f"  平滑路径: {len(result)} 点")
+    return result, corridors
 
 
 # =====================================================================
@@ -568,13 +516,19 @@ def run():
 
     # Step 6: Safe Corridor + B-Spline
     print("[6/7] Smoothing with SafeCorridor + BSpline ...")
-    smoothed = smooth_path(raw_path, outer, holes)
+    smoothed, corridors = smooth_path(raw_path, grid, grid_meta)
 
     # 转换为 Trajectory
     pts = np.array([(p[0], p[1]) for p in smoothed])
     traj = Trajectory(pts)
-    # 保存轨迹点供动画使用
+    # 保存轨迹点和走廊供动画使用
     np.save("output/sim_trajectory_optimization_traj.npy", pts)
+    # corridors: list of CorridorSection → 转为 (N,3,2) numpy 数组
+    if corridors:
+        corr_arr = np.array([[(s.left.x, s.left.y),
+                               (s.center.x, s.center.y),
+                               (s.right.x, s.right.y)] for s in corridors])
+        np.save("output/sim_trajectory_optimization_corridors.npy", corr_arr)
     print(f"  Optimized trajectory: {traj.total_len:.1f} m, {len(pts)} pts")
     print(f"  Traj diag: max|kappa|={np.max(np.abs(traj.kappa)):.4f}, "
           f"min seg={np.min(np.sqrt(np.sum(np.diff(pts, axis=0)**2, axis=1))):.4f}m, "
@@ -656,14 +610,14 @@ def run():
           f"s={N_STEPS*VX*DT:.0f}m / {traj.total_len:.0f}m")
 
     # 可视化
-    visualize(log, traj, raw_path, smoothed, outer, holes, grid_meta)
+    visualize(log, traj, raw_path, smoothed, outer, holes, grid_meta, corridors)
 
 
 # =====================================================================
 #  Visualization
 # =====================================================================
 
-def visualize(log, traj, raw_path, smoothed, outer, holes, grid_meta):
+def visualize(log, traj, raw_path, smoothed, outer, holes, grid_meta, corridors):
     arr = np.array(log)
     N = len(arr)
     ts  = arr[:, 1]
@@ -696,6 +650,32 @@ def visualize(log, traj, raw_path, smoothed, outer, holes, grid_meta):
 
     # 赛道边界
     ax.plot(outer[:,0], outer[:,1], "k-", lw=1.5, alpha=0.5, label="Track boundary")
+
+    # 用 outer 边界构建 clip path, 确保走廊可视化不超出道路
+    clip_patch = PathPatch(MplPath(outer), transform=ax.transData)
+    patch_kw = {"clip_path": clip_patch, "clip_on": True}
+
+    # 安全走廊 (填充多边形: 沿左侧前进 + 沿右侧返回, clip 到 outer 内)
+    if corridors:
+        lx = [s.left.x for s in corridors]
+        ly = [s.left.y for s in corridors]
+        rx = [s.right.x for s in corridors]
+        ry = [s.right.y for s in corridors]
+        corridor_poly_x = lx + rx[::-1]
+        corridor_poly_y = ly + ry[::-1]
+        ax.fill(corridor_poly_x, corridor_poly_y,
+                fc="cyan", ec="none", alpha=0.18,
+                label="Safe Corridor", **patch_kw)
+        # 画走廊边界线 — 用 clip_path 约束
+        ax.plot(lx, ly, "c-", lw=0.6, alpha=0.5, **patch_kw)
+        ax.plot(rx, ry, "c-", lw=0.6, alpha=0.5, **patch_kw)
+        # 每隔一段画横截面
+        for i in range(0, len(corridors), max(1, len(corridors)//20)):
+            s = corridors[i]
+            ax.plot([s.left.x, s.right.x], [s.left.y, s.right.y],
+                    "c-", lw=0.4, alpha=0.35, **patch_kw)
+
+    # 孔洞 (在走廊之后绘制, 覆盖侵入孔洞的走廊)
     for i, h in enumerate(holes):
         ax.fill(h[:,0], h[:,1], fc="white", ec="k", lw=0.8, alpha=0.95,
                 label=f"Hole {i}" if i == 0 else "")

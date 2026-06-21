@@ -1,57 +1,32 @@
 #include "safe_corridor.h"
 #include <cmath>
 #include <algorithm>
+#include <utility>
 
 SafeCorridor::SafeCorridor() {}
 
 // ===================================================================
-//  射线-线段交点
-// ===================================================================
-bool SafeCorridor::raySegIntersect(const Vec2d& orig, const Vec2d& dir,
-                                    const Vec2d& a, const Vec2d& b,
-                                    double& t) {
-    double seg_x = b.x - a.x, seg_y = b.y - a.y;
-    double cross = dir.x * seg_y - dir.y * seg_x;
-    if (std::abs(cross) < 1e-12) return false;  // 平行
-    double u = ((orig.x - a.x) * dir.y - (orig.y - a.y) * dir.x) / (-cross);
-    if (u < 0.0 || u > 1.0) return false;
-    t = ((a.x - orig.x) * seg_y - (a.y - orig.y) * seg_x) / (-cross);
-    return t >= 0.0;
-}
-
-// ===================================================================
-//  射线与多边形的最短正方向交距
-// ===================================================================
-double SafeCorridor::rayPolygonDist(const Vec2d& orig, const Vec2d& dir,
-                                     const std::vector<Vec2d>& poly) {
-    if (poly.size() < 2) return 1e9;
-    double best = 1e9;
-    int n = static_cast<int>(poly.size());
-    for (int i = 0; i < n; i++) {
-        const Vec2d& a = poly[i];
-        const Vec2d& b = poly[(i + 1) % n];
-        double t = 1e9;
-        if (raySegIntersect(orig, dir, a, b, t) && t < best)
-            best = t;
-    }
-    return best;
-}
-
-// ===================================================================
-//  build() — 构建安全走廊
+//  build() — 基于占用栅格逐 cell 扫描构建安全走廊
 // ===================================================================
 std::vector<CorridorSection> SafeCorridor::build(
     const std::vector<Pose>& ref_path,
-    const std::vector<Vec2d>& outer,
-    const std::vector<std::vector<Vec2d>>& holes) {
+    const std::vector<std::vector<int>>& grid,
+    double x_min, double y_min,
+    double cell_size, int cols, int rows) {
 
     std::vector<CorridorSection> result;
-    if (ref_path.size() < 2) return result;
+    if (ref_path.size() < 2 || grid.empty()) return result;
+
+    // 世界坐标 → 栅格索引
+    auto worldToGrid = [&](double wx, double wy) -> std::pair<int,int> {
+        int c = static_cast<int>((wx - x_min) / cell_size);
+        int r = static_cast<int>((wy - y_min) / cell_size);
+        return {r, c};
+    };
 
     // Step 1: 沿 ref_path 等弧长采样
     int n = static_cast<int>(ref_path.size());
 
-    // 累积弧长
     std::vector<double> cum_len(n, 0.0);
     for (int i = 1; i < n; i++) {
         double dx = ref_path[i].x - ref_path[i-1].x;
@@ -63,11 +38,9 @@ std::vector<CorridorSection> SafeCorridor::build(
 
     int num_samples = std::max(2, static_cast<int>(total_len / sample_interval_) + 1);
 
-    // 在每个采样点计算切线、法向、走廊边界
     auto interpolate = [&](double s) -> Pose {
         if (s <= 0.0) return ref_path[0];
         if (s >= total_len) return ref_path.back();
-        // 二分查找弧长所在段
         size_t lo = 0, hi = n - 1;
         while (lo + 1 < hi) {
             size_t mid = (lo + hi) / 2;
@@ -79,15 +52,21 @@ std::vector<CorridorSection> SafeCorridor::build(
         return {
             (1.0 - t) * ref_path[lo].x + t * ref_path[hi].x,
             (1.0 - t) * ref_path[lo].y + t * ref_path[hi].y,
-            ref_path[lo].theta  // 朝向同 lo 点
+            ref_path[lo].theta
         };
     };
+
+    // 最大扫描步数 (防止死循环)
+    double max_scan_dist = std::max(
+        (x_min + cols * cell_size) - x_min,
+        (y_min + rows * cell_size) - y_min);
+    int max_steps = static_cast<int>(max_scan_dist / cell_size) + 10;
 
     for (int i = 0; i < num_samples; i++) {
         double s = (total_len * i) / (num_samples - 1);
         Pose pt = interpolate(s);
 
-        // Step 2: 计算切线方向 (用前后点差分)
+        // Step 2: 计算切线方向
         double ds = std::max(0.5, sample_interval_ * 0.5);
         Pose pt_fwd = interpolate(std::min(total_len, s + ds));
         Pose pt_bwd = interpolate(std::max(0.0, s - ds));
@@ -101,34 +80,40 @@ std::vector<CorridorSection> SafeCorridor::build(
             tx /= tnorm; ty /= tnorm;
         }
 
-        // 左法向 (+90°)
+        // 左法向 (+90°) 和右法向 (-90°)
         Vec2d n_left  = { -ty,  tx };
         Vec2d n_right = {  ty, -tx };
 
-        // Step 3: 沿 ±法向射线求交点距离
-        Vec2d orig = { pt.x, pt.y };
-        double d_left  = rayPolygonDist(orig, n_left,  outer);
-        double d_right = rayPolygonDist(orig, n_right, outer);
+        // Step 3: 沿法向逐 cell 扫描
+        auto scan = [&](const Vec2d& dir) -> double {
+            for (int step = 1; step < max_steps; step++) {
+                double wx = pt.x + dir.x * step * cell_size;
+                double wy = pt.y + dir.y * step * cell_size;
+                auto [r, c] = worldToGrid(wx, wy);
+                if (r < 0 || r >= rows || c < 0 || c >= cols) {
+                    return (step - 1) * cell_size;
+                }
+                if (grid[r][c] == 1) {
+                    return (step - 1) * cell_size;
+                }
+            }
+            return (max_steps - 1) * cell_size;
+        };
 
-        // 孔洞: 如果射线穿过孔洞, 取更近的交点
-        for (auto& hole : holes) {
-            double hl = rayPolygonDist(orig, n_left,  hole);
-            double hr = rayPolygonDist(orig, n_right, hole);
-            if (hl < d_left)  d_left  = hl;
-            if (hr < d_right) d_right = hr;
-        }
+        double d_left  = scan(n_left);
+        double d_right = scan(n_right);
 
-        // Step 4: 减去安全边距
+        // Step 4: 减安全边距
         d_left  = std::max(0.0, d_left  - margin_);
         d_right = std::max(0.0, d_right - margin_);
 
         // Step 5: 存储截面
         CorridorSection sec;
-        sec.center = orig;
-        sec.left   = { orig.x + n_left.x  * d_left,
-                        orig.y + n_left.y  * d_left };
-        sec.right  = { orig.x + n_right.x * d_right,
-                        orig.y + n_right.y * d_right };
+        sec.center = { pt.x, pt.y };
+        sec.left   = { pt.x + n_left.x  * d_left,
+                       pt.y + n_left.y  * d_left };
+        sec.right  = { pt.x + n_right.x * d_right,
+                       pt.y + n_right.y * d_right };
         result.push_back(sec);
     }
 
