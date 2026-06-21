@@ -39,22 +39,37 @@ C++ 自动驾驶算法库 + Python 仿真管线。
 在每个 HA* 轨迹采样点上向左右法向**扩张矩形**, 检查矩形内全部 cell：
 
 ```
-         n_left
+         n_left (法向)
           ↑
  step 3:  ┌──────────────────┐  depth = 3×cell
- step 2:  │  ┌──────────────┐│  depth = 2×cell
- step 1:  │  │  ┌──────────┐││  depth = 1×cell
-          │  │  │  车辆    │││  ← 初始矩形 (宽 = 2×vehicle_hw)
+ step 2:  │  ┌──────────────┐│  
+ step 1:  │  │  ┌──────────┐││  
+          │  │  │  车辆    │││  ← 矩形宽 = 2×COLLISION_MARGIN
           │  │  └──────────┘││
           │  └──────────────┘│
           └──────────────────┘
-          ├── 2×hw ──┤
           
    逐层检查: 计算矩形包围盒 → 遍历每个 cell → 点积判定是否在矩形内
-   任一 occupied → 返回上一层距离 → 减 margin → 记录截面
+   任一 occupied → 返回上一层距离 → 减 CORRIDOR_MARGIN → 记录截面
 ```
 
-每个截面 `CorridorSection` 记录 `center`(采样点)、`left`(左边界)、`right`(右边界)。218 个截面连成安全走廊管道, 作为 B 样条拟合的硬约束。
+### 安全边距拆分
+
+同一安全约束拆为三个独立参数, 不再互相抵消：
+
+| 参数 | 用途 | 值 |
+|------|------|-----|
+| SAFETY_MARGIN | 栅格膨胀 (障碍物向外扩) | VEHICLE_HW + 0.2 |
+| COLLISION_MARGIN | HA\* 碰撞盒半宽 = 走廊矩形半宽 | VEHICLE_HW + 0.2 |
+| CORRIDOR_MARGIN | 走廊边界缩进 (膨胀后的路再往里收) | COLLISION_MARGIN |
+
+```
+真实障碍物 ─── SAFETY_MARGIN(膨胀) ─── dilated cell
+                    ← COLLISION_MARGIN →  HA* 车盒 + 走廊矩形
+                    ← CORRIDOR_MARGIN →  走廊边界
+```
+
+每个截面 `CorridorSection` 记录 `center`(采样点)、`left`(左边界)、`right`(右边界)。截面连成安全走廊管道, 作为 B 样条拟合的**硬约束**。
 
 ## C++ 算法模块 (pnc/)
 
@@ -106,8 +121,10 @@ python pipeline/sim_static_obstacles.py
 | 参数 | 值 | 说明 |
 |------|-----|------|
 | CELL_SIZE | 0.2m | 栅格分辨率 |
-| SAFETY_MARGIN | 0.5m | 安全边距 |
-| VEHICLE_HW | 0.5m | 车辆半宽 (矩形扫描宽度) |
+| VEHICLE_HW | 1.0m | 车辆半宽 (全宽 2.0m) |
+| SAFETY_MARGIN | VEHICLE_HW+0.2=1.2m | 栅格膨胀距离 |
+| COLLISION_MARGIN | VEHICLE_HW+0.2=1.2m | HA\* 碰撞盒半宽 / 走廊矩形半宽 |
+| CORRIDOR_MARGIN | COLLISION_MARGIN=1.2m | 走廊边界缩进 |
 | GATE_SPACING | 15m | Gate 间距 |
 | SAMPLE_INTERVAL | 2m | 走廊采样间距 |
 | BSPLINE_DEGREE | 3 | B 样条阶数 |

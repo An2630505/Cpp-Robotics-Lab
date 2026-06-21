@@ -219,26 +219,36 @@ python pipeline/sim_static_obstacles.py
  step 3:  ┌──────────────────┐  depth = 3×cell
  step 2:  │  ┌──────────────┐│  
  step 1:  │  │  ┌──────────┐││  
-          │  │  │  车辆    │││  ← 初始矩形 (宽 = 2×vehicle_hw)
+          │  │  │  车辆    │││  ← 矩形宽 = 2×COLLISION_MARGIN
           │  │  └──────────┘││
           │  └──────────────┘│
           └──────────────────┘
-          ├── 2×hw ──┤
           
  每层扩张: 计算矩形 4 角点的 grid 包围盒 → 遍历包围盒内每个 cell
           → 点积判定是否在矩形内 → 任一 occupied → 返回上一层距离
-          → 减 margin → 记录 CorridorSection(center, left, right)
+          → 减 CORRIDOR_MARGIN → 记录 CorridorSection(center, left, right)
 ```
 
-218 个截面连成安全走廊管道，作为 B 样条拟合的**硬约束**。
+### 安全边距拆分
+
+同一安全约束拆为三个独立参数，不再互相抵消：
+
+```
+真实障碍物 ─── SAFETY_MARGIN(栅格膨胀) ─── dilated cell
+                    ← COLLISION_MARGIN(HA* 车盒+走廊矩形) →
+                    ← CORRIDOR_MARGIN(走廊缩进) →
+                                                 走廊边界
+```
 
 ### 核心参数
 
 | 参数 | 值 | 说明 |
 |------|-----|------|
 | CELL_SIZE | 0.2 m | 栅格分辨率 |
-| SAFETY_MARGIN | 0.5 m | 障碍物膨胀 + 走廊边距 |
-| VEHICLE_HW | 0.5 m | 车辆半宽 (矩形扫描宽度) |
+| VEHICLE_HW | 1.0 m | 车辆半宽 (全宽 2.0m, 总长 2.5m) |
+| SAFETY_MARGIN | VEHICLE_HW+0.2=1.2m | 栅格膨胀距离 |
+| COLLISION_MARGIN | VEHICLE_HW+0.2=1.2m | HA\* 碰撞盒半宽 / 走廊矩形半宽 |
+| CORRIDOR_MARGIN | COLLISION_MARGIN=1.2m | 走廊边界缩进 |
 | GATE_SPACING | 15 m | Gate 间距 |
 | SAMPLE_INTERVAL | 2 m | 走廊截面采样间距 |
 | BSPLINE_DEGREE | 3 (cubic) | B 样条阶数 |
