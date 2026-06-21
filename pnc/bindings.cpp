@@ -158,6 +158,8 @@ PYBIND11_MODULE(pnc, m) {
         .def("set_xy_bin", &HybridAStar::setXYBin)
         .def("set_vehicle_dims", &HybridAStar::setVehicleDims,
              py::arg("half_width"), py::arg("forward"), py::arg("rearward"))
+        .def("set_grid_origin", &HybridAStar::setGridOrigin,
+             py::arg("x_min"), py::arg("y_min"))
         .def("plan", &HybridAStar::plan, py::arg("start"), py::arg("goal"))
         .def("plan_to_gate", &HybridAStar::planToGate,
              py::arg("start"), py::arg("gate_a"), py::arg("gate_b"));
@@ -182,8 +184,12 @@ PYBIND11_MODULE(pnc, m) {
         .def("set_margin", &SafeCorridor::setMargin, py::arg("m"))
         .def("set_sample_interval", &SafeCorridor::setSampleInterval,
              py::arg("ds"))
+        .def("set_vehicle_half_width", &SafeCorridor::setVehicleHalfWidth,
+             py::arg("hw"))
         .def("build", &SafeCorridor::build,
-             py::arg("ref_path"), py::arg("outer"), py::arg("holes"));
+             py::arg("ref_path"), py::arg("grid"),
+             py::arg("x_min"), py::arg("y_min"),
+             py::arg("cell_size"), py::arg("cols"), py::arg("rows"));
 
     // ---- BSpline ----
     py::class_<BSplineParams>(m, "BSplineParams")
