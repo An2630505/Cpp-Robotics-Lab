@@ -13,6 +13,7 @@ pybind11_add_module(pnc
     motion/map_parser/map_parser.cc
     motion/safe_corridor/safe_corridor.cc
     motion/bspline/bspline.cc
+    prediction/dynamic_obstacle.cc
 )
 
 target_link_libraries(pnc PRIVATE Eigen3::Eigen)
@@ -31,6 +32,7 @@ set(PNC_IMPL_SRCS
     motion/map_parser/map_parser.cc
     motion/safe_corridor/safe_corridor.cc
     motion/bspline/bspline.cc
+    prediction/dynamic_obstacle.cc
 )
 
 set(PNC_TESTS

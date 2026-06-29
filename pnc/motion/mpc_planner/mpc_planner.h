@@ -2,7 +2,9 @@
 #define PNC_MOTION_MPC_PLANNER_H_
 
 #include <vector>
+#include <memory>
 #include "../../common/types.h"
+#include "../../prediction/dynamic_obstacle.h"
 
 const double MPC_CELL_SIZE    = 0.2;
 const int    MPC_GRID_SIZE    = 256;
@@ -13,6 +15,9 @@ const double MPC_MAX_STEER    = 0.6;
 class ContinuousMap {
 public:
     ContinuousMap(const std::vector<std::vector<int>>& grid);
+    ContinuousMap(const std::vector<std::vector<int>>& grid,
+                  double x_min, double y_min, double cell_size);
+    void setOrigin(double x_min, double y_min, double cell_size);
     int worldToRow(double y) const;
     int worldToCol(double x) const;
     double rowToWorldY(int row) const;
@@ -20,8 +25,13 @@ public:
     bool isOccupied(int row, int col) const;
     bool isCollision(const Pose& pose) const;
     const std::vector<std::vector<int>>& grid() const { return grid_; }
+    double cellSize() const { return cell_size_; }
+    int rows() const { return rows_; }
+    int cols() const { return cols_; }
 private:
     std::vector<std::vector<int>> grid_;
+    double x_min_ = 0.0, y_min_ = 0.0, cell_size_ = MPC_CELL_SIZE;
+    int rows_ = MPC_GRID_SIZE, cols_ = MPC_GRID_SIZE;
 };
 
 class MPCTrajectoryPlanner {
@@ -29,15 +39,23 @@ public:
     MPCTrajectoryPlanner(const std::vector<std::vector<int>>& grid);
     std::vector<Pose> plan(const std::vector<Pose>& ref_path,
                            std::vector<double>& out_velocities,
-                           std::vector<double>& out_steers);
+                           std::vector<double>& out_steers,
+                           double t_start = 0.0);
     void setHorizon(int N)          { N_ = N; }
     void setDt(double dt)           { dt_ = dt; }
     void setDesiredSpeed(double v)  { v_des_ = v; }
+    void setGridOrigin(double x_min, double y_min, double cell_size);
+    void setCostWeights(double w_pos, double w_theta, double w_steer,
+                        double w_dsteer, double w_collision, double w_vel);
+    void setMaxIterations(int n)    { max_iter_ = n; }
+    void setGradientStep(double s)  { step_size_ = s; }
+    void addDynamicObstacle(std::shared_ptr<DynamicObstacle> obs);
 private:
     int N_, max_iter_;
-    double dt_, L_, v_des_, step_size_;
+    double dt_, L_, v_des_, step_size_, t_start_;
     double w_pos_, w_theta_, w_steer_, w_dsteer_, w_collision_, w_vel_;
     ContinuousMap cmap_;
+    std::vector<std::shared_ptr<DynamicObstacle>> dynamic_obstacles_;
     std::vector<Pose> rollout(const Pose& start,
                               const std::vector<double>& vels,
                               const std::vector<double>& steers) const;
@@ -45,7 +63,12 @@ private:
                        const std::vector<double>& vels,
                        const std::vector<double>& steers,
                        const std::vector<Pose>& ref) const;
-    double collisionCost(const Pose& pose) const;
+    double computeCostPartial(const std::vector<Pose>& traj,
+                              const std::vector<double>& vels,
+                              const std::vector<double>& steers,
+                              const std::vector<Pose>& ref,
+                              int start_k) const;
+    double collisionCost(const Pose& pose, int step_k = -1) const;
     Pose getLookahead(const std::vector<Pose>& path,
                       const Pose& current, double L_ahead) const;
     void trackWithPurePursuit(const Pose& start,
@@ -53,6 +76,8 @@ private:
                               std::vector<double>& out_vels,
                               std::vector<double>& out_steers,
                               std::vector<Pose>& out_traj);
+    std::vector<Pose> extractRefWindow(const std::vector<Pose>& ref_path,
+                                       const Pose& start) const;
 };
 
 #endif  // PNC_MOTION_MPC_PLANNER_H_

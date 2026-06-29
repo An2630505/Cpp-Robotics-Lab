@@ -2,8 +2,8 @@
 sim_dynamic_obstacles.py — 动态障碍物场景仿真
 
 管线: path2.png → map_parser → centerline → circuit
-      → occupancy grid → HA* (全局) → SafeCorridor → BSpline
-      → MPC + 横向偏移避障
+      → occupancy grid → mpc_planner 轨迹优化 (梯度下降 + 碰撞势场)
+      → MPC 跟踪
 
 用法: python pipeline/sim_dynamic_obstacles.py (需 conda 环境 CRL, Python 3.11)
 """
@@ -46,11 +46,11 @@ MAX_STEER  = math.radians(30.0)
 CELL_SIZE      = 0.2
 GATE_SPACING   = 15.0
 HA_ARC_LENGTH  = 0.6
-VEHICLE_HW     = 1.0
-VEHICLE_FWD    = 1.5
-VEHICLE_REV    = 1.0
-SAFETY_MARGIN  = VEHICLE_HW + 0.2
-COLLISION_MARGIN = VEHICLE_HW + 0.2
+VEHICLE_HW     = 0.45   # 半宽, 全宽0.9m ≈ 赛道1/4
+VEHICLE_FWD    = 0.8
+VEHICLE_REV    = 0.5
+SAFETY_MARGIN  = VEHICLE_HW + 0.15
+COLLISION_MARGIN = VEHICLE_HW + 0.15
 CORRIDOR_MARGIN  = COLLISION_MARGIN
 
 BSPLINE_DEGREE       = 3
@@ -446,13 +446,22 @@ def replace_trajectory_segment(traj_orig, ego_x, ego_y, new_smoothed_pts,
     return Trajectory(combined)
 
 
+def _smooth_trajectory_pts(pts, sigma=1.5):
+    """对轨迹 (x,y) 做高斯平滑, 消除拼接处的硬拐角。"""
+    from scipy.ndimage import gaussian_filter1d
+    smoothed = pts.copy()
+    smoothed[:, 0] = gaussian_filter1d(pts[:, 0], sigma, mode='nearest')
+    smoothed[:, 1] = gaussian_filter1d(pts[:, 1], sigma, mode='nearest')
+    return smoothed
+
+
 # =====================================================================
 #  Main simulation
 # =====================================================================
 
 def run():
     print("=" * 60)
-    print("  动态障碍物场景 — HA* + MPC")
+    print("  动态障碍物场景 — mpc_planner + MPC")
     print("=" * 60)
 
     from pipeline.map_parser import parse_map
@@ -484,58 +493,133 @@ def run():
     print("[3/6] 构建占用栅格 ...")
     base_grid, grid_meta = build_occupancy_grid(outer, map_holes, CELL_SIZE, SAFETY_MARGIN)
 
-    # 辅助: 局部 HA* + B-Spline
-    def local_plan(grid_cur, ego_x, ego_y, ego_heading):
-        """从 ego 位姿起, 向中心线前方 LOOK_AHEAD 米做局部 HA* + 平滑。"""
-        gx, gy, gh = find_look_ahead_pose(ego_x, ego_y, loop_pts, cl_cum_s, LOOK_AHEAD)
-        goal_pose = pnc.Pose(); goal_pose.x = gx; goal_pose.y = gy; goal_pose.theta = gh
-        ha = pnc.HybridAStar(grid_cur)
-        ha.set_cell_size(CELL_SIZE); ha.set_wheelbase(L_WB)
-        ha.set_max_steer(MAX_STEER); ha.set_num_steer(5)
-        ha.set_arc_length(HA_ARC_LENGTH)
-        ha.set_goal_xy_tol(1.0); ha.set_goal_th_tol(1.0)
-        ha.set_vehicle_dims(COLLISION_MARGIN, VEHICLE_FWD + 0.2, VEHICLE_REV + 0.2)
-        ha.set_grid_origin(grid_meta["x_min"], grid_meta["y_min"])
-        ego_pose = pnc.Pose()
-        ego_pose.x = ego_x; ego_pose.y = ego_y; ego_pose.theta = ego_heading
-        try:
-            path = ha.plan(ego_pose, goal_pose)
-        except Exception:
-            return None
-        if path is None or len(path) < 3:
-            return None
-        raw = [(p.x, p.y, p.theta) for p in path]
-        try:
-            smoothed_pts, _ = smooth_path(raw, grid_cur, grid_meta)
-        except Exception:
-            return None
-        if len(smoothed_pts) < 3:
-            return None
-        return smoothed_pts
+    # 辅助: 局部 mpc_planner 轨迹优化 (替代 HA* + SafeCorridor + B-Spline)
+    def mpc_local_plan(grid_dyn, ego_x, ego_y, ego_heading, t_now=0.0):
+        """从 ego 位姿起, 用 MPCTrajectoryPlanner 做局部轨迹优化。
 
-    # [4] 初始化 NPC
-    print("\n[4/6] 初始化 NPC ...")
+        在中心线上采样参考路径, 通过梯度下降优化速度/转向序列,
+        collisionCost (1/d² 排斥势场) 自动推开轨迹远离 NPC。
+        t_now: 当前仿真时间, 用于动态障碍物预测。
+        """
+        n_horizon = 30
+        dt_mpc = 0.1
+        desired_speed = VX
+
+        # 构建参考路径: 自车位姿 + 中心线前方等弧长采样
+        ref_path = []
+        ego_pose = pnc.Pose(); ego_pose.x = ego_x; ego_pose.y = ego_y
+        ego_pose.theta = ego_heading
+        ref_path.append(ego_pose)
+
+        ego_s = find_ego_centerline_s(ego_x, ego_y, loop_pts, cl_cum_s)
+        total_len = float(cl_cum_s[-1])
+        horizon_dist = desired_speed * n_horizon * dt_mpc  # ≈30m
+
+        for k in range(1, n_horizon + 1):
+            s_target = (ego_s + horizon_dist * k / n_horizon) % total_len
+            idx = int(np.searchsorted(cl_cum_s, s_target))
+            idx = min(idx, len(loop_pts) - 1)
+            if idx == 0:
+                x, y = float(loop_pts[0, 0]), float(loop_pts[0, 1])
+                dx = loop_pts[1, 0] - loop_pts[0, 0]
+                dy = loop_pts[1, 1] - loop_pts[0, 1]
+            else:
+                s0, s1 = cl_cum_s[idx-1], cl_cum_s[idx]
+                t_val = (s_target - s0) / (s1 - s0) if s1 > s0 else 0.0
+                t_val = max(0.0, min(1.0, t_val))
+                x = (1-t_val) * float(loop_pts[idx-1, 0]) + t_val * float(loop_pts[idx, 0])
+                y = (1-t_val) * float(loop_pts[idx-1, 1]) + t_val * float(loop_pts[idx, 1])
+                dx = loop_pts[idx, 0] - loop_pts[idx-1, 0]
+                dy = loop_pts[idx, 1] - loop_pts[idx-1, 1]
+            heading = math.atan2(dy, dx)
+            ref_p = pnc.Pose(); ref_p.x = x; ref_p.y = y; ref_p.theta = heading
+            ref_path.append(ref_p)
+
+        # 创建优化器, 设置动态栅格 + 原点 + 权重
+        planner = pnc.MPCTrajectoryPlanner(grid_dyn)
+        planner.set_grid_origin(grid_meta["x_min"], grid_meta["y_min"],
+                                grid_meta["cell_size"])
+        planner.set_horizon(n_horizon)
+        planner.set_dt(dt_mpc)
+        planner.set_desired_speed(desired_speed)
+        planner.set_max_iterations(50)    # 上限, 通常 20-30 次即收敛
+        planner.set_gradient_step(0.02)
+        # 碰撞权重 800 >> 位置权重 10, 确保排斥势场主导避障
+        planner.set_cost_weights(10.0, 5.0, 2.0, 15.0, 800.0, 1.0)
+        # 注册所有动态障碍物
+        for obs in dynamic_obs_list:
+            planner.add_dynamic_obstacle(obs)
+
+        try:
+            traj, velocities, steers = planner.plan(ref_path, t_now)
+        except Exception:
+            return None
+
+        if traj is None or len(traj) < 3:
+            return None
+
+        return [(p.x, p.y, p.theta) for p in traj]
+
+    # [4] 初始化 NPC (暂时跳过, 先验证纯轨迹跟踪)
+    print("\n[4/6] 跳过 NPC (纯轨迹跟踪验证) ...")
     npc_manager = NpcManager()
-    npc_manager.add_npc(NpcVehicle(NPC_1_START, NPC_SPEED, NPC_HW, NPC_FWD, NPC_REV))
-    npc_manager.add_npc(NpcVehicle(NPC_2_START, NPC_SPEED, NPC_HW, NPC_FWD, NPC_REV))
-    print(f"  NPC 1: start@{NPC_1_START*100:.0f}%, NPC 2: start@{NPC_2_START*100:.0f}%")
+    # npc_manager.add_npc(NpcVehicle(NPC_1_START, NPC_SPEED, NPC_HW, NPC_FWD, NPC_REV))
+    # npc_manager.add_npc(NpcVehicle(NPC_2_START, NPC_SPEED, NPC_HW, NPC_FWD, NPC_REV))
+    print(f"  NPC: 0 辆")
 
-    # [5] 初始局部规划 → 初始 Trajectory
-    print("\n[5/6] 初始局部 HA* + 追加式重规划 ...")
-    start_x, start_y = float(loop_pts[0, 0]), float(loop_pts[0, 1])
-    # 计算起始朝向
-    gx_p = loop_pts[min(1, len(loop_pts)-1), 0] - loop_pts[0, 0]
-    gy_p = loop_pts[min(1, len(loop_pts)-1), 1] - loop_pts[0, 1]
-    start_h = math.atan2(gy_p, gx_p)
+    # [5] 全局 HA* + SafeCorridor + B-Spline → 平滑基线轨迹 (仅一次)
+    print("\n[5/6] 全局 HA* + SafeCorridor + B-Spline ...")
+    gates = generate_gates(loop_pts, GATE_SPACING, LANE_WIDTH)
+    print(f"  Gates: {len(gates)}")
+    gates.append(gates[0])  # 闭环
+    start_pose = pnc.Pose()
+    start_pose.x = (gates[0][0].x + gates[0][1].x) * 0.5
+    start_pose.y = (gates[0][0].y + gates[0][1].y) * 0.5
+    gx = gates[0][0].x - gates[0][1].x
+    gy = gates[0][0].y - gates[0][1].y
+    start_pose.theta = math.atan2(-gx, gy)
 
-    init_smoothed = local_plan(base_grid, start_x, start_y, start_h)
-    if init_smoothed is None:
-        print("  ❌ 初始局部规划失败!")
-        return
-    init_arr = np.array([(p[0], p[1]) for p in init_smoothed])
-    traj = Trajectory(init_arr)
-    print(f"  初始轨迹: {traj.total_len:.1f} m, {len(init_arr)} pts")
-    print(f"\n[5/6] MPC 仿真 (ego={VX:.0f}m/s, npc={NPC_SPEED:.0f}m/s) ...")
+    raw_path = plan_through_gates(base_grid, grid_meta, start_pose, gates)
+    if len(raw_path) < 3:
+        print("  ⚠ HA* 失败, 退回中心线")
+        raw_path = [(x, y, 0.0) for x, y in loop_pts]
+
+    smoothed_pts, corridors = smooth_path(raw_path, base_grid, grid_meta)
+    base_pts = np.array([(p[0], p[1]) for p in smoothed_pts])
+    base_traj = Trajectory(base_pts)
+    traj = base_traj
+    print(f"  基线轨迹: {traj.total_len:.1f} m, {len(base_pts)} pts, "
+          f"max|kappa|={np.max(np.abs(traj.kappa)):.4f}")
+
+    # 创建动态障碍物
+    def _create_obs(s_obs, amp, period, phase=0.0):
+        _s = s_obs % cl_total_len
+        _idx = min(int(np.searchsorted(cl_cum_s, _s)), len(loop_pts) - 1)
+        if _idx == 0:
+            x_ref, y_ref = float(loop_pts[0, 0]), float(loop_pts[0, 1])
+            h_ref = 0.0
+        else:
+            s0, s1 = cl_cum_s[_idx-1], cl_cum_s[_idx]
+            _t = (_s - s0) / (s1 - s0) if s1 > s0 else 0.0
+            _t = max(0.0, min(1.0, _t))
+            x_ref = (1-_t) * float(loop_pts[_idx-1, 0]) + _t * float(loop_pts[_idx, 0])
+            y_ref = (1-_t) * float(loop_pts[_idx-1, 1]) + _t * float(loop_pts[_idx, 1])
+            h_ref = math.atan2(float(loop_pts[_idx, 1] - loop_pts[_idx-1, 1]),
+                               float(loop_pts[_idx, 0] - loop_pts[_idx-1, 0]))
+        obs = pnc.SinusoidalObstacle(x_ref, y_ref, h_ref, amp, period, phase)
+        print(f"  障碍物: s={s_obs:.0f}m ({x_ref:.1f},{y_ref:.1f}), ±{amp:.1f}m / {period:.1f}s phase={phase:.2f}")
+        return obs, (x_ref, y_ref, h_ref, amp, period, phase)
+
+    dynamic_obs_list = []
+    obs_info_list = []
+    # 障碍物1: s=150m, ±3m, 5s, 相位π/2 让 ego 到达时在最大振幅
+    obs1, info1 = _create_obs(150.0, 3.0, 5.0, math.pi/2)
+    dynamic_obs_list.append(obs1); obs_info_list.append(info1)
+    # 障碍物2: s=300m, ±2.5m, 3s, 相位π/2
+    obs2, info2 = _create_obs(300.0, 2.5, 3.0, math.pi/2)
+    dynamic_obs_list.append(obs2); obs_info_list.append(info2)
+
+    print(f"\n[5/6] MPC 仿真 (ego={VX:.0f}m/s) ...")
     A_c, B1_c, B2_c = build_cont_matrices()
     A_d = np.eye(4) + A_c * DT; B1_d = B1_c * DT
     print(f"  |eig(A_d)| = {[f'{e:.4f}' for e in sorted(np.abs(np.linalg.eigvals(A_d)), reverse=True)]}")
@@ -551,7 +635,7 @@ def run():
     S_term = np.eye(4) * 1.0
     mpc = pnc.MPC(); mpc.init(A_d, B1_d, C_mat, Q, R, S_term, N_HORIZON)
 
-    N_STEPS = int(cl_total_len / (VX * DT)) + 200
+    N_STEPS = int(base_traj.total_len / (VX * DT)) + 50
     N_STEPS = min(N_STEPS, 5000)
     print(f"  Max {N_STEPS} steps = {N_STEPS*DT:.1f}s")
 
@@ -559,61 +643,60 @@ def run():
     log, npc_log = [], []
     steer = 0.0; local_s = 0.0
     collision_npc = False; collision_boundary = False
-    target = np.zeros(4)
     total_replans = 0; failed_replans = 0
+    avoid_offset = 0.0  # 持久横向偏移
 
     for step in range(N_STEPS):
         t = step * DT; s_travel = t * VX
 
-        # 更新 NPC
-        npc_manager.update(t, loop_pts, cl_cum_s, cl_total_len)
-        npc_log.append(npc_manager.get_positions())
+        # 更新 NPC (跳过 — 纯轨迹跟踪验证)
+        # npc_manager.update(t, loop_pts, cl_cum_s, cl_total_len)
+        npc_log.append([])
 
         # 参考状态 & 自车位姿
         ref = traj.get_state(local_s)
         kappa_cur = float(ref[3])
         e_y = float(model.x[0]); e_psi = float(model.x[2])
-        ego_x, ego_y, _ = get_ego_world_pose(ref, e_y, e_psi)
-        # 用中心线插值取 heading (避免 B-Spline 边界效应导致方向反转)
-        cl_psi = float(interpolate_centerline_heading(ref[0], ref[1], loop_pts, cl_cum_s))
-        ego_heading = cl_psi + e_psi
+        ego_x, ego_y, ego_heading = get_ego_world_pose(ref, e_y, e_psi)
+        ego_x = float(ego_x); ego_y = float(ego_y); ego_heading = float(ego_heading)
 
-        # ---- 追加式重规划 (每 MIN_REPLAN_GAP 步, 跳过 step 0) ----
-        if step > 0 and step % MIN_REPLAN_GAP == 0:
+        # ---- 重规划 (只在障碍物附近生成避障偏移) ----
+        ego_cl_s = find_ego_centerline_s(ego_x, ego_y, loop_pts, cl_cum_s)
+        # 到最近障碍物的距离
+        obs_positions = [o[0] for o in obs_info_list]  # s 值从 _create_obs 参数
+        obs_positions = [150.0, 300.0]  # 硬编码对应两个障碍物的 s 位置
+        dist_to_obs = min(
+            min(abs(ego_cl_s - s), cl_total_len - abs(ego_cl_s - s))
+            for s in obs_positions)
+
+        if dist_to_obs < 80.0 and step % MIN_REPLAN_GAP == 0:
             total_replans += 1
-
-            # 构建动态栅格 (基础栅格 + NPC 当前位置)
             grid_dyn = [row[:] for row in base_grid]
             npc_manager.apply_to_grid(grid_dyn, grid_meta, DYNAMIC_OBS_DILATION)
 
-            new_pts = local_plan(grid_dyn, ego_x, ego_y, ego_heading)
-            if new_pts is not None:
-                new_arr = np.array([(p[0], p[1]) for p in new_pts])
-                traj_new = Trajectory(new_arr)
-                ref_new = traj_new.get_state(0.0)
-                # 用中心线 heading 避開 B-Spline 邊界效應
-                cl_psi_ref = float(interpolate_centerline_heading(
-                    float(ref_new[0]), float(ref_new[1]), loop_pts, cl_cum_s))
-                dx = float(ego_x) - float(ref_new[0])
-                dy = float(ego_y) - float(ref_new[1])
-                e_y_new = -dx * math.sin(cl_psi_ref) + dy * math.cos(cl_psi_ref)
-                e_psi_new = ego_heading - cl_psi_ref
-                e_psi_new = (e_psi_new + math.pi) % (2 * math.pi) - math.pi
-                # 只切轨迹，不动 KF/MPC 状态
-                traj = traj_new
-                local_s = 0.0
+            new_pts = mpc_local_plan(grid_dyn, ego_x, ego_y, ego_heading, t)
+            if new_pts is not None and len(new_pts) > 2:
+                # 从 mpc_planner 输出中提取期望横向偏移
+                # 轨迹第 1→2 步的法向位移 = 避障方向
+                dx = new_pts[1][0] - new_pts[0][0]
+                dy = new_pts[1][1] - new_pts[0][1]
+                nx = -math.sin(ref[2])
+                ny = math.cos(ref[2])
+                step_offset = dx * nx + dy * ny
+                # 累加偏移方向 (用 MPC 纵向误差 target[0] 实现)
+                if abs(step_offset) > 0.02:
+                    avoid_offset = math.copysign(min(abs(step_offset) * 3.0, 2.5), step_offset)
 
                 if total_replans <= 3 or total_replans % 20 == 0:
-                    npc_dist = compute_nearest_npc_dist(
-                        ego_x, ego_y, npc_manager, loop_pts, cl_cum_s)
                     print(f"  [{step:4d}] 重规划 #{total_replans}: "
-                          f"t={t:.1f}s npc_dist={npc_dist:.0f}m, "
-                          f"new={len(new_pts)}pts, traj_len={traj.total_len:.1f}m")
+                          f"t={t:.1f}s offset={avoid_offset:+.2f}m "
+                          f"obs_dist={dist_to_obs:.0f}m")
             else:
                 failed_replans += 1
 
         # MPC
         model.kf.update(model.y, np.array([steer]))
+        target = np.array([avoid_offset, 0.0, 0.0, 0.0])
         u_fb = mpc.predict(target, model.kf.x_post)
         steer_ff = feedforward(kappa_cur)
         steer = float(u_fb[0] + steer_ff)
@@ -623,12 +706,7 @@ def run():
 
         log.append((step, t, e_y, e_psi, steer, ego_x, ego_y, ego_heading))
 
-        # 碰撞检测
-        if npc_manager.check_collision_with_ego(ego_x, ego_y, ego_heading,
-                                                  VEHICLE_HW, VEHICLE_FWD, VEHICLE_REV):
-            if not collision_npc:
-                print(f"  ❌ [{step:4d}] t={t:.1f}s 与 NPC 碰撞!")
-                collision_npc = True
+        # 碰撞检测 (NPC跳过, 只检边界)
         if not check_ego_in_bounds(ego_x, ego_y, ego_heading, outer, mpl_outer):
             if not collision_boundary:
                 print(f"  ❌ [{step:4d}] t={t:.1f}s 超出道路边界!")
@@ -637,15 +715,13 @@ def run():
 
         # 进度
         if step % 100 == 0:
-            min_dist = min(math.hypot(ego_x-n.x, ego_y-n.y) for n in npc_manager.npcs)
             print(f"  {step:4d} t={t:5.1f}s s={s_travel:6.0f}m "
                   f"e_y={e_y:+.3f}m e_psi={math.degrees(e_psi):+.1f}deg "
-                  f"str={math.degrees(steer):+.1f}deg npc_dist={min_dist:.0f}m "
-                  f"replan={total_replans}")
+                  f"str={math.degrees(steer):+.1f}deg")
 
         # 一圈完成
-        if s_travel >= cl_total_len:
-            print(f"\n  → 自车完成一圈! s={s_travel:.1f}m >= {cl_total_len:.1f}m")
+        if s_travel >= base_traj.total_len:
+            print(f"\n  → 自车完成一圈! s={s_travel:.1f}m >= {base_traj.total_len:.1f}m")
             break
 
     # 统计
@@ -673,11 +749,18 @@ def run():
     for i, h in enumerate(map_holes):
         np.save(f"output/sim_dynamic_obstacles_hole_{i}.npy", h)
     np.save("output/sim_dynamic_obstacles_log.npy", arr)
-    npc_arr = np.array(npc_log)
-    np.save("output/sim_dynamic_obstacles_npc.npy", npc_arr)
+    if len(npc_log) > 0 and len(npc_log[0]) > 0:
+        npc_arr = np.array(npc_log)
+        np.save("output/sim_dynamic_obstacles_npc.npy", npc_arr)
+
+    # 保存动态障碍物参数 + 时间轴 (供动画脚本使用)
+    obs_params = np.array(obs_info_list)  # (N_obs, 4): x_ref,y_ref,h_ref,amp,period
+    np.save("output/sim_dynamic_obstacles_obs.npy", obs_params)
+    t_arr = np.array([row[1] for row in log])
+    np.save("output/sim_dynamic_obstacles_obs_t.npy", t_arr)
 
     visualize(log, traj, outer, map_holes, npc_log,
-              loop_pts, collision_npc, collision_boundary)
+              loop_pts, collision_npc, collision_boundary, obs_info_list)
 
 
 # =====================================================================
@@ -685,16 +768,23 @@ def run():
 # =====================================================================
 
 def visualize(log, traj, outer, holes, npc_log,
-              centerline_pts, collision_npc, collision_boundary):
-    arr = np.array(log)
+              centerline_pts, collision_npc, collision_boundary,
+              obs_info_list=None):
+    arr = np.array(log, dtype=float)
+    if arr.ndim != 2:
+        arr = arr.reshape(-1, 8)
     N = len(arr)
     ts   = arr[:, 1]; ey = arr[:, 2]; ep = arr[:, 3]; st = arr[:, 4]
     ego_wx = arr[:, 5]; ego_wy = arr[:, 6]; ego_wh = arr[:, 7]
 
     # NPC 轨迹
-    npc_arr = np.array(npc_log)[:N]
-    npc1_x, npc1_y = npc_arr[:, 0, 0], npc_arr[:, 0, 1]
-    npc2_x, npc2_y = npc_arr[:, 1, 0], npc_arr[:, 1, 1]
+    has_npcs = len(npc_log) > 0 and len(npc_log[0]) > 0
+    if has_npcs:
+        npc_arr = np.array(npc_log)[:N]
+        npc1_x, npc1_y = npc_arr[:, 0, 0], npc_arr[:, 0, 1]
+        npc2_x, npc2_y = npc_arr[:, 1, 0], npc_arr[:, 1, 1]
+    else:
+        npc1_x = npc1_y = npc2_x = npc2_y = np.array([])
 
     fig = plt.figure(figsize=(20, 14))
     status = "⚠ COLLISION" if (collision_npc or collision_boundary) else "✅ OK"
@@ -714,19 +804,20 @@ def visualize(log, traj, outer, holes, npc_log,
         ax.plot(traj.points[:, 0], traj.points[:, 1], "b-", lw=1.5, alpha=0.4, label="Reference")
 
     # NPC 轨迹
-    skip = max(1, N // 300)
-    ax.plot(npc1_x[::skip], npc1_y[::skip], "orange", lw=1.5, alpha=0.8, ls="--", label="NPC 1")
-    ax.plot(npc2_x[::skip], npc2_y[::skip], "purple", lw=1.5, alpha=0.8, ls="--", label="NPC 2")
-    ax.plot(npc1_x[0], npc1_y[0], "o", color="orange", ms=8)
-    ax.plot(npc2_x[0], npc2_y[0], "o", color="purple", ms=8)
+    if has_npcs:
+        skip = max(1, N // 300)
+        ax.plot(npc1_x[::skip], npc1_y[::skip], "orange", lw=1.5, alpha=0.8, ls="--", label="NPC 1")
+        ax.plot(npc2_x[::skip], npc2_y[::skip], "purple", lw=1.5, alpha=0.8, ls="--", label="NPC 2")
+        ax.plot(npc1_x[0], npc1_y[0], "o", color="orange", ms=8)
+        ax.plot(npc2_x[0], npc2_y[0], "o", color="purple", ms=8)
 
-    # NPC 车辆矩形 (每 ~5s)
-    for i in range(0, N, max(1, int(5.0 / DT))):
-        for color, npx, npy, nph in [
-                ("orange", npc1_x[i], npc1_y[i], npc_arr[i, 0, 2]),
-                ("purple", npc2_x[i], npc2_y[i], npc_arr[i, 1, 2])]:
-            corners = _vehicle_corners_world(npx, npy, nph, NPC_HW, NPC_FWD, NPC_REV)
-            ax.add_patch(MplPolygon(corners, closed=True, fc=color, ec="k", alpha=0.3, lw=0.5))
+        # NPC 车辆矩形 (每 ~5s)
+        for i in range(0, N, max(1, int(5.0 / DT))):
+            for color, npx, npy, nph in [
+                    ("orange", npc1_x[i], npc1_y[i], npc_arr[i, 0, 2]),
+                    ("purple", npc2_x[i], npc2_y[i], npc_arr[i, 1, 2])]:
+                corners = _vehicle_corners_world(npx, npy, nph, NPC_HW, NPC_FWD, NPC_REV)
+                ax.add_patch(MplPolygon(corners, closed=True, fc=color, ec="k", alpha=0.3, lw=0.5))
 
     # 自车轨迹
     skip_e = max(1, N // 500)
@@ -736,6 +827,21 @@ def visualize(log, traj, outer, holes, npc_log,
     for i in range(0, N, max(1, N // 8)):
         ax.arrow(ego_wx[i], ego_wy[i], math.cos(ego_wh[i]) * 2.5, math.sin(ego_wh[i]) * 2.5,
                  head_width=1.2, fc="r", ec="r", alpha=0.4)
+
+    # 动态障碍物: 中心点 + ±振幅扫描范围
+    if obs_info_list is not None:
+        colors = ['orange', 'cyan']
+        for i, obs_info in enumerate(obs_info_list):
+            ox, oy, oh, amp = obs_info[:4]
+            c = colors[i % len(colors)]
+            nx, ny = -math.sin(oh), math.cos(oh)
+            ax.plot(ox, oy, 'D', color=c, ms=10, label=f'Obs{i+1}')
+            for sign in [-1, 1]:
+                end_x = ox + sign * amp * nx
+                end_y = oy + sign * amp * ny
+                ax.plot([ox, end_x], [oy, end_y], color=c, lw=2, alpha=0.5)
+            ax.plot([ox - amp*nx, ox + amp*nx], [oy - amp*ny, oy + amp*ny],
+                    color=c, lw=1, ls='--', alpha=0.3)
 
     ax.legend(loc="upper right", fontsize=7, ncol=2)
 
@@ -755,13 +861,22 @@ def visualize(log, traj, outer, holes, npc_log,
 
     # --- NPC 距离 ---
     ax = fig.add_subplot(2, 3, 5)
-    d1 = np.sqrt((ego_wx - npc1_x)**2 + (ego_wy - npc1_y)**2)
-    d2 = np.sqrt((ego_wx - npc2_x)**2 + (ego_wy - npc2_y)**2)
-    ax.plot(ts, d1, "orange", lw=1.0, alpha=0.7, label="NPC 1")
-    ax.plot(ts, d2, "purple", lw=1.0, alpha=0.7, label="NPC 2")
-    ax.axhline(2.5, color="red", ls=":", lw=0.8, alpha=0.5, label="collision")
+    if has_npcs:
+        d1 = np.sqrt((ego_wx - npc1_x)**2 + (ego_wy - npc1_y)**2)
+        d2 = np.sqrt((ego_wx - npc2_x)**2 + (ego_wy - npc2_y)**2)
+        ax.plot(ts, d1, "orange", lw=1.0, alpha=0.7, label="NPC 1")
+        ax.plot(ts, d2, "purple", lw=1.0, alpha=0.7, label="NPC 2")
+        ax.axhline(2.5, color="red", ls=":", lw=0.8, alpha=0.5, label="collision")
+        min_d1, min_d2 = float(np.min(d1[N//10:])), float(np.min(d2[N//10:]))
+    else:
+        d1 = d2 = np.array([])
+        min_d1, min_d2 = float('inf'), float('inf')
+        ax.text(0.5, 0.5, "无 NPC", transform=ax.transAxes, ha='center', va='center')
     ax.set_xlabel("Time (s)"); ax.set_ylabel("Distance (m)")
-    ax.set_title("Ego-NPC Distance"); ax.legend(fontsize=7); ax.grid(True, alpha=0.3)
+    ax.set_title("Ego-NPC Distance")
+    if has_npcs:
+        ax.legend(fontsize=7)
+    ax.grid(True, alpha=0.3)
 
     # --- 转向 ---
     ax = fig.add_subplot(2, 3, 6)
@@ -774,9 +889,13 @@ def visualize(log, traj, outer, holes, npc_log,
     skip_w = max(1, N // 10)
     ey_rms = float(np.sqrt(np.mean(ey[skip_w:]**2)))
     ep_rms = float(np.sqrt(np.mean(ep[skip_w:]**2)))
-    min_d1, min_d2 = float(np.min(d1[skip_w:])), float(np.min(d2[skip_w:]))
-    print(f"  RMS: e_y={ey_rms:.4f}m  e_psi={math.degrees(ep_rms):.2f}deg")
-    print(f"  Min NPC dist: NPC1={min_d1:.2f}m  NPC2={min_d2:.2f}m")
+    if has_npcs and len(d1) > skip_w:
+        min_d1 = float(np.min(d1[skip_w:]))
+        min_d2 = float(np.min(d2[skip_w:]))
+        print(f"  RMS: e_y={ey_rms:.4f}m  e_psi={math.degrees(ep_rms):.2f}deg")
+        print(f"  Min NPC dist: NPC1={min_d1:.2f}m  NPC2={min_d2:.2f}m")
+    else:
+        print(f"  RMS: e_y={ey_rms:.4f}m  e_psi={math.degrees(ep_rms):.2f}deg")
 
     out_png = "output/sim_dynamic_obstacles.png"
     fig.savefig(out_png, dpi=150, bbox_inches="tight")

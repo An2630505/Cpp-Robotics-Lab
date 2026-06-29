@@ -30,8 +30,8 @@ from pipeline.sim_dynamic_obstacles import Trajectory
 # 车辆几何 (与仿真一致)
 LF, LR    = 1.1, 1.58
 L_WB      = LF + LR
-FWD, REV  = 1.5, 1.0       # 后轴到车头/车尾 (总长 2.5m)
-HW        = 1.0             # 车半宽 (全宽 2.0m)
+FWD, REV  = 0.8, 0.5       # 后轴到车头/车尾
+HW        = 0.45            # 车半宽 (全宽 0.9m ≈ 赛道1/4)
 NPC_FWD   = 1.5             # NPC 车辆尺寸
 NPC_REV   = 1.0
 NPC_HW    = 1.0
@@ -64,8 +64,34 @@ def load_boundaries():
 def load_npc_data():
     path = "output/sim_dynamic_obstacles_npc.npy"
     if os.path.exists(path):
-        return np.load(path)  # shape: (N_steps, 2, 3) — [step, npc_idx, (x, y, heading)]
+        data = np.load(path)
+        # 空数据或无NPC场景返回None
+        if data.ndim < 3 or data.shape[1] == 0:
+            return None
+        return data  # shape: (N_steps, 2, 3) — [step, npc_idx, (x, y, heading)]
     return None
+
+
+def load_obs_data():
+    """加载动态障碍物参数和时间轴。返回 (N_obs, 5) 数组。"""
+    obs_path = "output/sim_dynamic_obstacles_obs.npy"
+    t_path = "output/sim_dynamic_obstacles_obs_t.npy"
+    if os.path.exists(obs_path) and os.path.exists(t_path):
+        obs = np.load(obs_path)  # (N_obs, 5): [x_ref, y_ref, h_ref, amp, period]
+        t_arr = np.load(t_path)
+        if obs.ndim == 1:
+            obs = obs.reshape(1, -1)
+        return obs, t_arr
+    return None, None
+
+
+def obs_position_at(obs_params, t):
+    """计算障碍物在时刻 t 的世界坐标 (x, y)。"""
+    x_ref, y_ref, h_ref, amp, period = obs_params[:5]
+    phase = obs_params[5] if len(obs_params) > 5 else 0.0
+    lat = amp * math.sin(2.0 * math.pi * t / period + phase)
+    nx, ny = -math.sin(h_ref), math.cos(h_ref)  # 法向量
+    return x_ref + lat * nx, y_ref + lat * ny
 
 
 # ============================================================
@@ -139,9 +165,11 @@ def run():
     ego_wy = data[:, 6]
     ego_wh = data[:, 7]
 
-    print("Loading trajectory & boundaries & NPCs ...")
+    print("Loading trajectory & boundaries & NPCs & Obstacle ...")
     outer, holes = load_boundaries()
     npc_data = load_npc_data()
+    obs_params, obs_t_arr = load_obs_data()
+    has_obs = obs_params is not None
 
     # 加载轨迹
     traj_path = "output/sim_dynamic_obstacles_traj.npy"
@@ -237,6 +265,25 @@ def run():
                              fc="purple", ec="darkviolet", lw=1, alpha=0.6, zorder=4)
     ax_map.add_patch(npc1_patch); ax_map.add_patch(npc2_patch)
 
+    # 动态障碍物 (地图上的部分)
+    obs_patches = []; dyn_obs_dots = []; ov_obs_dots = []
+    obs_colors = ['orange', 'cyan']
+    if has_obs:
+        n_obs = obs_params.shape[0]
+        for oi in range(n_obs):
+            x_ref, y_ref, h_ref, amp = obs_params[oi, :4]
+            c = obs_colors[oi % len(obs_colors)]
+            nx, ny = -math.sin(h_ref), math.cos(h_ref)
+            ax_map.plot([x_ref - amp*nx, x_ref + amp*nx],
+                        [y_ref - amp*ny, y_ref + amp*ny],
+                        color=c, lw=1.5, ls='--', alpha=0.4)
+            ax_map.plot(x_ref, y_ref, 'D', color=c, ms=8, alpha=0.6)
+            obs_patches.append(MplPolygon([[0,0],[1,0],[1,1],[0,1]], closed=True,
+                                fc=c, ec=c, lw=1.5, alpha=0.7, zorder=6))
+            ax_map.add_patch(obs_patches[-1])
+            d, = ax_map.plot([], [], 'o', color=c, ms=6, zorder=6)
+            dyn_obs_dots.append(d)
+
     info_txt = ax_map.text(0.015, 0.975, "", transform=ax_map.transAxes,
                            fontsize=9, va="top", family="monospace",
                            bbox=dict(boxstyle="round", fc="lightyellow", alpha=0.85))
@@ -257,6 +304,11 @@ def run():
     ov_dot,   = ax_ov.plot([], [], "ro", ms=6, mec="#800", mew=0.8)
     ov_npc1,  = ax_ov.plot([], [], "o", color="orange", ms=4, alpha=0.7)
     ov_npc2,  = ax_ov.plot([], [], "o", color="purple", ms=4, alpha=0.7)
+    if has_obs:
+        for oi in range(obs_params.shape[0]):
+            c = obs_colors[oi % len(obs_colors)]
+            d, = ax_ov.plot([], [], 's', color=c, ms=5, alpha=0.8)
+            ov_obs_dots.append(d)
     ax_ov.set_xlim(ov_x_min - ov_pad, ov_x_max + ov_pad)
     ax_ov.set_ylim(ov_y_min - ov_pad, ov_y_max + ov_pad)
 
@@ -350,6 +402,24 @@ def run():
             ov_npc1.set_data([npc1[0]], [npc1[1]])
             ov_npc2.set_data([npc2[0]], [npc2[1]])
 
+        # 动态障碍物
+        if has_obs:
+            t_f = obs_t_arr[min(idx, len(obs_t_arr) - 1)]
+            for oi in range(obs_params.shape[0]):
+                ox, oy = obs_position_at(obs_params[oi], t_f)
+                hw = 0.5
+                h_ref = obs_params[oi, 2]
+                c, s = math.cos(h_ref), math.sin(h_ref)
+                lx = [hw, hw, -hw, -hw]
+                ly = [hw, -hw, -hw, hw]
+                corners = [(ox + lx[i]*c - ly[i]*s, oy + lx[i]*s + ly[i]*c) for i in range(4)]
+                if oi < len(obs_patches):
+                    obs_patches[oi].set_xy(corners)
+                if oi < len(dyn_obs_dots):
+                    dyn_obs_dots[oi].set_data([ox], [oy])
+                if oi < len(ov_obs_dots):
+                    ov_obs_dots[oi].set_data([ox], [oy])
+
         # 主视角
         cx, cy = ego_wx[idx], ego_wy[idx]
         if not args.full:
@@ -375,11 +445,14 @@ def run():
         dn_line1.set_data(t_arr[:n_data], d1_all[:n_data]); dn_cur1.set_data([times[fi]], [d1_all[idx]])
         dn_line2.set_data(t_arr[:n_data], d2_all[:n_data]); dn_cur2.set_data([times[fi]], [d2_all[idx]])
 
-        return ([dyn_trail, dyn_npc1, dyn_npc2, info_txt,
+        ret = [dyn_trail, dyn_npc1, dyn_npc2, info_txt,
                  ey_line, ey_cur, ep_line, ep_cur, st_line, st_cur,
                  dn_line1, dn_cur1, dn_line2, dn_cur2,
                  ov_trail, ov_dot, ov_npc1, ov_npc2, npc1_patch, npc2_patch]
-                + ego_patches)
+        if has_obs:
+            ret.extend(obs_patches + dyn_obs_dots + ov_obs_dots)
+        ret.extend(ego_patches)
+        return ret
 
     fps = max(1, int(round(1000 / interval_ms))) if interval_ms > 0 else 5
     ani = FuncAnimation(fig, update, frames=nf, interval=interval_ms, blit=False)

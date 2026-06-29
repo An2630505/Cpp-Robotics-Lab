@@ -15,6 +15,7 @@
 #include "motion/map_parser/map_parser.h"
 #include "motion/safe_corridor/safe_corridor.h"
 #include "motion/bspline/bspline.h"
+#include "prediction/dynamic_obstacle.h"
 
 namespace py = pybind11;
 
@@ -164,6 +165,25 @@ PYBIND11_MODULE(pnc, m) {
         .def("plan_to_gate", &HybridAStar::planToGate,
              py::arg("start"), py::arg("gate_a"), py::arg("gate_b"));
 
+    // ---- DynamicObstacle / SinusoidalObstacle ----
+    class PyDynamicObstacle : public DynamicObstacle {
+    public:
+        Vec2d predict(double t) const override {
+            PYBIND11_OVERRIDE_PURE(Vec2d, DynamicObstacle, predict, t);
+        }
+    };
+
+    py::class_<DynamicObstacle, PyDynamicObstacle,
+               std::shared_ptr<DynamicObstacle>>(m, "DynamicObstacle")
+        .def(py::init<>())
+        .def("predict", &DynamicObstacle::predict, py::arg("t"));
+
+    py::class_<SinusoidalObstacle, DynamicObstacle,
+               std::shared_ptr<SinusoidalObstacle>>(m, "SinusoidalObstacle")
+        .def(py::init<double, double, double, double, double, double>(),
+             py::arg("x_ref"), py::arg("y_ref"), py::arg("heading_ref"),
+             py::arg("amplitude"), py::arg("period"), py::arg("phase") = 0.0);
+
     // ---- MPCTrajectoryPlanner (output refs wrapped → tuple) ----
     py::class_<MPCTrajectoryPlanner>(m, "MPCTrajectoryPlanner")
         .def(py::init<const std::vector<std::vector<int>>&>(),
@@ -171,12 +191,22 @@ PYBIND11_MODULE(pnc, m) {
         .def("set_horizon", &MPCTrajectoryPlanner::setHorizon)
         .def("set_dt", &MPCTrajectoryPlanner::setDt)
         .def("set_desired_speed", &MPCTrajectoryPlanner::setDesiredSpeed)
+        .def("set_grid_origin", &MPCTrajectoryPlanner::setGridOrigin,
+             py::arg("x_min"), py::arg("y_min"), py::arg("cell_size"))
+        .def("set_cost_weights", &MPCTrajectoryPlanner::setCostWeights,
+             py::arg("w_pos"), py::arg("w_theta"), py::arg("w_steer"),
+             py::arg("w_dsteer"), py::arg("w_collision"), py::arg("w_vel"))
+        .def("set_max_iterations", &MPCTrajectoryPlanner::setMaxIterations)
+        .def("set_gradient_step", &MPCTrajectoryPlanner::setGradientStep)
+        .def("add_dynamic_obstacle",
+             &MPCTrajectoryPlanner::addDynamicObstacle, py::arg("obs"))
         .def("plan", [](MPCTrajectoryPlanner& self,
-                        const std::vector<Pose>& ref_path) {
+                        const std::vector<Pose>& ref_path,
+                        double t_start) {
             std::vector<double> velocities, steers;
-            auto traj = self.plan(ref_path, velocities, steers);
+            auto traj = self.plan(ref_path, velocities, steers, t_start);
             return py::make_tuple(traj, velocities, steers);
-        }, py::arg("ref_path"));
+        }, py::arg("ref_path"), py::arg("t_start") = 0.0);
 
     // ---- SafeCorridor ----
     py::class_<SafeCorridor>(m, "SafeCorridor")
