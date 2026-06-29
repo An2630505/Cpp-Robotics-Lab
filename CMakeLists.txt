@@ -11,3 +11,4 @@ find_package(Eigen3 REQUIRED)
 find_package(pybind11 REQUIRED)
 
 add_subdirectory(pnc)
+add_subdirectory(engine/physics)
