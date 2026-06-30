@@ -145,7 +145,10 @@ PYBIND11_MODULE(engine_physics, m) {
     // ---- BicycleModel ----
     py::class_<BicycleModel, MotionModel, std::shared_ptr<BicycleModel>>(m, "BicycleModel")
         .def(py::init<double>(), py::arg("wheelbase"))
-        .def_property_readonly("wheelbase", &BicycleModel::wheelbase);
+        .def_property_readonly("wheelbase", &BicycleModel::wheelbase)
+        .def_property("lat_damping", &BicycleModel::lat_damping,
+                      &BicycleModel::set_lat_damping,
+                      "Lateral damping coefficient (1/s, default 5.0, 0=ice)");
 
     // ---- SimpleModel ----
     py::class_<SimpleModel, MotionModel, std::shared_ptr<SimpleModel>>(m, "SimpleModel")

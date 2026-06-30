@@ -27,6 +27,10 @@ Velocity BicycleModel::step(const Pose& current_pose,
     // 控制指令只影响纵向: 沿车头方向施加加速度
     double v_lon_new = v_lon + cmd.ax * dt;
 
+    // 轮胎侧向阻尼: 模拟侧偏刚度, 将侧滑速度逐步衰减
+    // v_lat *= exp(-lat_damping * dt) ≈ 1 - lat_damping * dt
+    v_lat *= std::max(0.0, 1.0 - lat_damping_ * dt);
+
     // 自行车模型: omega = v_lon * tan(steer) / L
     double omega_new = v_lon * std::tan(cmd.steer) / wheelbase_;
 

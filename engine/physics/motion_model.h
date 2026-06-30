@@ -42,8 +42,13 @@ public:
 
     double wheelbase() const { return wheelbase_; }
 
+    /// 侧向阻尼系数 (模拟轮胎侧偏刚度, 默认 5.0, 0=无阻尼/冰面)
+    void set_lat_damping(double d) { lat_damping_ = d; }
+    double lat_damping() const { return lat_damping_; }
+
 private:
-    double wheelbase_;  // 轴距 L (m)
+    double wheelbase_;      // 轴距 L (m)
+    double lat_damping_ = 5.0;  // 侧向速度衰减率 (1/s)
 };
 
 // ============================================================================
